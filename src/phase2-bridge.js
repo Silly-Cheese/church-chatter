@@ -54,9 +54,13 @@ function options() {
 }
 
 function unlockNavigation() {
+  const current = hashRoute();
   document.querySelectorAll('[data-route="chatter"],[data-route="prayer"],[data-route="gather"],[data-route="groups"]').forEach((button) => {
     button.classList.remove("locked");
     button.querySelector(".badge")?.remove();
+  });
+  document.querySelectorAll(".mobile-nav [data-route]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.route === current);
   });
   document.querySelectorAll(".sidebar-card").forEach((card) => {
     if (card.textContent.includes("Phase 1")) card.innerHTML = `<strong>Phase 2 is live.</strong><p>Chatter, Prayer, Gather, Groups, announcements, and church activity are now connected.</p>`;
@@ -72,6 +76,7 @@ function unlockNavigation() {
     topActions.prepend(button);
     button.addEventListener("click", () => navigate("activity"));
   }
+  topActions?.querySelector("#activity-center")?.classList.toggle("active", current === "activity");
 }
 
 function removePhaseOnePlaceholders() {
