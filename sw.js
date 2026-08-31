@@ -1,9 +1,10 @@
-const CACHE = "church-chatter-shell-v2";
+const CACHE = "church-chatter-shell-v3";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./community.css",
+  "./phase3.css",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./src/firebase.js",
@@ -12,6 +13,9 @@ const APP_SHELL = [
   "./src/community-data.js",
   "./src/community.js",
   "./src/phase2-bridge.js",
+  "./src/phase3-data.js",
+  "./src/phase3.js",
+  "./src/phase3-bridge.js",
   "./src/pwa.js"
 ];
 
