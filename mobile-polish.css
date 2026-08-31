@@ -1,0 +1,40 @@
+.mobile-sidebar-close { display: none; }
+
+@media (max-width: 980px) {
+  .sidebar {
+    width: min(88vw, 310px);
+    max-width: 310px;
+    border-radius: 0 24px 24px 0;
+    padding-top: 18px;
+  }
+  .sidebar .brand-lockup { padding-right: 48px; }
+  .mobile-sidebar-close {
+    display: grid;
+    position: absolute;
+    top: 17px;
+    right: 14px;
+    z-index: 2;
+    width: 38px;
+    height: 38px;
+    border-radius: 13px;
+    background: #f6f8f6;
+  }
+}
+
+@media (max-width: 700px) {
+  .mobile-nav button .mobile-nav-icon {
+    margin-bottom: 0;
+    font-size: inherit;
+  }
+  .mobile-nav button .mobile-nav-label {
+    display: block;
+    margin-bottom: 0;
+    font-size: .61rem;
+    line-height: 1;
+  }
+  .mobile-nav > span[hidden] { display: none !important; }
+}
+
+@media (max-width: 390px) {
+  .mobile-nav button .mobile-nav-label { font-size: .57rem; }
+}
