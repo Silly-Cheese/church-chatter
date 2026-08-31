@@ -1,4 +1,4 @@
-const CACHE = "church-chatter-shell-v8";
+const CACHE = "church-chatter-shell-v9";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -15,6 +15,8 @@ const APP_SHELL = [
   "./src/firebase.js",
   "./src/services.js",
   "./src/app.js",
+  "./src/mail-service.js",
+  "./src/mail-bridge.js",
   "./src/community-data.js",
   "./src/community.js",
   "./src/phase2-bridge.js",
@@ -44,11 +46,13 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
 
-  // Firebase SDKs, authentication traffic, and Firestore APIs stay network-managed.
+  // Firebase SDKs, authentication traffic, Firestore APIs, and Apps Script stay network-managed.
   if (
     url.hostname.includes("googleapis.com") ||
     url.hostname.includes("firebaseapp.com") ||
-    url.hostname.includes("gstatic.com")
+    url.hostname.includes("gstatic.com") ||
+    url.hostname.includes("script.google.com") ||
+    url.hostname.includes("script.googleusercontent.com")
   ) return;
 
   event.respondWith(
