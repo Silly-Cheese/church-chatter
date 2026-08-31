@@ -130,15 +130,20 @@ export async function getServeSignupState(churchId, opportunityId, uid) {
   const signupRef = doc(opportunityRef, "signups", uid);
   const [opportunity, mine] = await Promise.all([getDoc(opportunityRef), getDoc(signupRef)]);
   if (!opportunity.exists()) throw new Error("That serving opportunity no longer exists.");
+
+  let signups = [];
+  try {
+    const roster = await getDocs(collection(opportunityRef, "signups"));
+    signups = mapSnapshot(roster).sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+  } catch (_) {
+    // Roster listing is intentionally manager-only. Members still receive count + self state.
+  }
+
   return {
     signedUp: mine.exists(),
-    count: Math.max(0, Number(opportunity.data().signupCount || 0))
+    count: Math.max(0, Number(opportunity.data().signupCount || 0)),
+    signups
   };
-}
-
-export async function listServeSignups(churchId, opportunityId) {
-  const snapshot = await getDocs(collection(db, "churches", churchId, "serveOpportunities", opportunityId, "signups"));
-  return mapSnapshot(snapshot).sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
 }
 
 export async function signUpToServe(churchId, opportunityId, user, member) {
@@ -207,7 +212,7 @@ export async function saveSundayHub(churchId, user, input) {
 }
 
 export async function createReport(churchId, user, input) {
-  const targetType = ["chatter", "prayer", "comment"].includes(input.targetType) ? input.targetType : "chatter";
+  const targetType = ["chatter", "prayer"].includes(input.targetType) ? input.targetType : "chatter";
   const targetId = clean(input.targetId, 160);
   const reason = ["inappropriate", "harassment", "privacy", "spam", "other"].includes(input.reason) ? input.reason : "other";
   if (!targetId) throw new Error("The reported content could not be identified.");
