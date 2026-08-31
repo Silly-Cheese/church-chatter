@@ -65,6 +65,20 @@ async function collectChildren(parentDocs, childNames) {
   return refs;
 }
 
+async function disconnectMember(churchId, uid, memberRef, onProgress, progress) {
+  // Remove the user's cross-links before their church member record. If deletion is interrupted,
+  // every member already removed is fully disconnected and remaining members can be discovered on retry.
+  await deleteDoc(doc(db, "users", uid, "memberships", churchId));
+  progress.deleted += 1;
+  onProgress?.({ ...progress });
+  await deleteDoc(doc(db, "users", uid, "activity", churchId));
+  progress.deleted += 1;
+  onProgress?.({ ...progress });
+  await deleteDoc(memberRef);
+  progress.deleted += 1;
+  onProgress?.({ ...progress });
+}
+
 export async function deleteCongregation(churchId, user, onProgress) {
   if (!churchId || !user?.uid) throw new Error("A signed-in congregation creator is required.");
 
@@ -79,14 +93,6 @@ export async function deleteCongregation(churchId, user, onProgress) {
 
   const progress = { stage: "Preparing deletion…", deleted: 0, total: 0 };
   onProgress?.({ ...progress });
-
-  // Mark the congregation first. Hardened rules stop ordinary congregation writes while deletion runs,
-  // while the original creator retains cleanup access and can safely retry if a connection fails.
-  await updateDoc(churchRef, {
-    status: "deleting",
-    deletionStartedAt: serverTimestamp(),
-    deletionStartedBy: user.uid
-  });
 
   progress.stage = "Finding congregation data…";
   onProgress?.({ ...progress });
@@ -111,15 +117,15 @@ export async function deleteCongregation(churchId, user, onProgress) {
   const inviteSnapshot = topSnapshots.get("invites");
   const globalInviteRefs = (inviteSnapshot?.docs || []).map((item) => doc(db, "inviteCodes", item.id));
 
-  const memberIds = membersSnapshot.docs.map((item) => item.id);
-  const userLinkRefs = [];
-  memberIds.forEach((uid) => {
-    userLinkRefs.push(doc(db, "users", uid, "memberships", churchId));
-    userLinkRefs.push(doc(db, "users", uid, "activity", churchId));
-  });
+  const creatorMember = membersSnapshot.docs.find((item) => item.id === user.uid) || null;
+  const otherMembers = membersSnapshot.docs.filter((item) => item.id !== user.uid);
+  progress.total = nestedRefs.length + topRefs.length + globalInviteRefs.length + (otherMembers.length * 3) + 4;
 
-  const memberRefs = membersSnapshot.docs.map((item) => item.ref);
-  progress.total = nestedRefs.length + topRefs.length + globalInviteRefs.length + userLinkRefs.length + memberRefs.length + 1;
+  progress.stage = "Disconnecting congregation members…";
+  onProgress?.({ ...progress });
+  await runLimited(otherMembers, async (memberDoc) => {
+    await disconnectMember(churchId, memberDoc.id, memberDoc.ref, onProgress, progress);
+  }, 4);
 
   progress.stage = "Removing conversations and nested activity…";
   onProgress?.({ ...progress });
@@ -133,13 +139,20 @@ export async function deleteCongregation(churchId, user, onProgress) {
   onProgress?.({ ...progress });
   await deleteRefs(globalInviteRefs, onProgress, progress);
 
-  progress.stage = "Removing member links…";
+  progress.stage = "Removing creator membership…";
   onProgress?.({ ...progress });
-  await deleteRefs(userLinkRefs, onProgress, progress);
+  await deleteDoc(doc(db, "users", user.uid, "activity", churchId));
+  progress.deleted += 1;
+  onProgress?.({ ...progress });
+  await deleteDoc(doc(db, "users", user.uid, "memberships", churchId));
+  progress.deleted += 1;
+  onProgress?.({ ...progress });
 
-  progress.stage = "Removing congregation members…";
-  onProgress?.({ ...progress });
-  await deleteRefs(memberRefs, onProgress, progress);
+  if (creatorMember) {
+    await deleteDoc(creatorMember.ref);
+    progress.deleted += 1;
+    onProgress?.({ ...progress });
+  }
 
   // Reset the creator's active congregation before the top-level church document disappears.
   const userRef = doc(db, "users", user.uid);
