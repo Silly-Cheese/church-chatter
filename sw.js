@@ -1,13 +1,18 @@
-const CACHE = "church-chatter-shell-v1";
+const CACHE = "church-chatter-shell-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
+  "./community.css",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./src/firebase.js",
   "./src/services.js",
-  "./src/app.js"
+  "./src/app.js",
+  "./src/community-data.js",
+  "./src/community.js",
+  "./src/phase2-bridge.js",
+  "./src/pwa.js"
 ];
 
 self.addEventListener("install", (event) => {
@@ -26,7 +31,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
 
-  // Never cache Firebase API calls or authentication traffic.
+  // Firebase SDKs, authentication traffic, and Firestore APIs stay network-managed.
   if (
     url.hostname.includes("googleapis.com") ||
     url.hostname.includes("firebaseapp.com") ||
