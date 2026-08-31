@@ -14,6 +14,15 @@ function route() {
   return window.location.hash.replace(/^#\/?/, "").split("?")[0] || "home";
 }
 
+function esc(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function go(nextRoute) {
   closeSheet();
   window.location.hash = `#/${nextRoute}`;
@@ -106,7 +115,7 @@ function renderSheet() {
     routeExists("admin") ? item("admin", "Church Admin", "Leadership tools & settings", "admin", current) : ""
   ].join("");
 
-  sheet.innerHTML = `<div class="mobile-more-handle"></div><div class="mobile-more-head"><div><small>More from</small><strong>${churchName()}</strong></div><button type="button" class="mobile-more-close" data-mobile-close aria-label="Close navigation">×</button></div><section class="mobile-more-section"><div class="mobile-more-label">Community</div><div class="mobile-more-grid">${communityItems}</div></section><section class="mobile-more-section"><div class="mobile-more-label">Your church</div><div class="mobile-more-grid">${churchItems}</div></section><div class="mobile-more-account"><div class="avatar">${account.initials}</div><div class="mobile-more-account-copy"><strong>${account.name}</strong><small>${account.email}</small></div><button type="button" data-mobile-profile>Profile</button></div>`;
+  sheet.innerHTML = `<div class="mobile-more-handle"></div><div class="mobile-more-head"><div><small>More from</small><strong>${esc(churchName())}</strong></div><button type="button" class="mobile-more-close" data-mobile-close aria-label="Close navigation">×</button></div><section class="mobile-more-section"><div class="mobile-more-label">Community</div><div class="mobile-more-grid">${communityItems}</div></section><section class="mobile-more-section"><div class="mobile-more-label">Your church</div><div class="mobile-more-grid">${churchItems}</div></section><div class="mobile-more-account"><div class="avatar">${esc(account.initials)}</div><div class="mobile-more-account-copy"><strong>${esc(account.name)}</strong><small>${esc(account.email)}</small></div><button type="button" data-mobile-profile>Profile</button></div>`;
 
   sheet.querySelector("[data-mobile-close]")?.addEventListener("click", closeSheet);
   sheet.querySelector("[data-mobile-profile]")?.addEventListener("click", () => go("profile"));
