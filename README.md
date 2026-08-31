@@ -2,105 +2,127 @@
 
 **Your church. Your community. Connected all week.**
 
-Church Chatter is a denomination-neutral private community platform for local churches. The platform provides the structure; each congregation supplies its own identity, terminology, leadership model, and teaching.
+Church Chatter is a denomination-neutral private community platform for local churches. The platform provides the structure; each congregation supplies its own identity, terminology, leadership model, teaching, and ministry language.
 
-## Current build: Phase 2
+## Current build: Phase 3
 
-Phase 1 established the platform foundation and Phase 2 adds the living church-community experience.
+Phase 3 completes the first full Church Chatter product build while keeping the technical stack intentionally simple: GitHub Pages, Firebase Authentication, and Cloud Firestore.
 
-### Identity and church foundation
+### Foundation
 
 - Google sign-in as the primary authentication method
-- Email/password account creation and sign-in as an alternative
-- Password reset support
-- First-run onboarding
-- Create a church community
-- Join a church with a private invitation code
-- Multiple churches on one user account
+- Email/password as an alternative
+- Password reset
+- Create or join a church
+- Private invitation codes
+- Multiple churches per account
 - Church switching
-- Member directory
-- Church profiles
-- Custom church roles
-- Permission-based access
-- Role assignment
-- Invitation creation, limits, expiration, revocation, and reactivation
-- User profile management
+- Church profiles and member directory
+- Custom church roles and permission-based access
+- Denomination-neutral terminology
 - Responsive desktop/mobile interface
-- Installable PWA shell
+- Installable PWA
 
 ### Chatter
 
-- Real-time congregation Chatter feed
-- Custom Chatter Rooms
-- Create and edit posts
-- Delete your own posts
-- Moderator deletion and pinning
-- Comments
-- Amen reactions with transaction-protected counters
-- Church-scoped authorship and moderation rules
+- Real-time congregation feed
+- Chatter Rooms
+- Posts, comments, editing, deletion, pinning, and Amen reactions
+- Moderator controls
+- Member reporting workflow into Church Admin
 
 ### Prayer
 
 - Congregation prayer wall
 - Leadership-only prayer requests
-- Truly anonymous prayer documents that do not store the author's account ID
-- “I Prayed” instead of social-media likes
-- Transaction-protected prayer counts
-- Mark requests as answered
-- Reopen answered requests when needed
+- Anonymous prayer documents without stored author UIDs
+- “I Prayed” acknowledgements
+- Answered-prayer status
+- Moderation reporting
 
 ### Gather
 
 - Church events and gatherings
-- Start/end times
 - Locations and descriptions
 - Going / Maybe / Can't go RSVPs
-- Event cancellation by authorized church leadership
-- Upcoming-event presentation on Home
+- Authorized event management and cancellation
 
 ### Groups
 
-- Open and private church groups
+- Open and private groups
 - Group leaders and members
-- Self-join for open groups
-- Group-specific Chatter
-- Group-specific Prayer
-- Group-specific Gather/events
-- Ministry/class/team terminology remains church-defined
+- Group-specific Chatter, Prayer, and Gather
+- Church-defined ministry/class/team terminology
 
-### Announcements and activity
+### Announcements and Activity
 
-- Official church announcements
-- Normal, important, and urgent priorities
-- Announcement surfacing on Home
-- Church Activity Center
-- Recent Chatter, Prayer, Gather, and announcements in one timeline
-- Per-user activity checkpoint storage
+- Normal, important, and urgent announcements
+- Live Home surfacing
+- Activity Center combining recent church activity
 
-### Home
+### Serve
 
-The Phase 1 placeholder dashboard is progressively upgraded into a live church dashboard containing recent conversations, prayer activity, gatherings, announcements, and church shortcuts.
+- Church volunteer opportunities
+- Ministry/team labels
+- Date, location, description, and requested spots
+- Member self-signup and withdrawal
+- Leadership volunteer roster view
+- Open/close opportunity controls
+
+### Resources
+
+- Church-managed resource library
+- Sermons, studies, forms, documents, and links
+- Categories and descriptions
+- Archive/restore support
+- Link-only design: no Firebase Storage or file uploads
+
+### Sunday Hub
+
+Churches can configure a Sunday-focused Home experience with:
+
+- Welcome message
+- Up to two primary gathering/service times
+- Sermon title and Scripture
+- Bulletin link
+- Sermon-notes link
+- Visitor/connect link
+
+When enabled, the Hub appears automatically on Sundays according to the member's local device time.
+
+### Church Admin
+
+Authorized church leaders receive a dedicated administration center with:
+
+- Member, group, gathering, Serve, resource, and report snapshots
+- Shortcuts into existing permission-controlled management tools
+- Moderation report queue
+- Resolve, dismiss, and reopen report workflows
+- Sunday Hub configuration
+
+Administrative access is permission-based rather than title-based.
 
 ## Security hardening
 
-Phase 2 expands `firestore.rules` around explicit collection-specific permissions rather than simply allowing all church members to write to community data.
+The Phase 3 ruleset consolidates and hardens the complete Phase 1–3 data model.
 
 Important protections include:
 
-- Active church membership checks
-- Authorship validation on Chatter and comments
-- Body length validation
-- Moderator-only pinning
-- Transaction-coupled reaction and prayer counters
-- Leadership-only prayer isolation in a separate collection
+- Active church membership boundaries
+- Authorship validation on community content
+- Narrow field-level update rules
+- Protected owner/default-member role behavior
+- Restricted delegation of administrative permissions
+- Transaction-coupled Chatter reaction and prayer counters
+- Leadership-only prayer isolation
 - Anonymous prayer requests without stored author UIDs
-- Event-management permissions
-- RSVP ownership rules
 - Group membership boundaries
-- Group-leader controls
-- Restricted administrative-permission delegation
-- Protected owner and default-member role permissions
-- Exact invitation lookup without global invitation enumeration
+- Group author identity fields protected from crafted-client rewrites
+- Event and announcement mutation restrictions
+- Self-owned RSVPs and Serve signups
+- Church-admin-only resource and Sunday Hub writes
+- Moderator-only report access and resolution
+- Exact invitation lookup without global invite enumeration
 
 ## Technology
 
@@ -118,14 +140,13 @@ The project is configured for Firebase project `church-chattrd`.
 
 In Firebase Console:
 
-1. Open **Authentication → Sign-in method**.
-2. Enable **Google**.
-3. Enable **Email/Password**.
-4. Add the GitHub Pages hostname and any future custom Church Chatter domain to **Authentication → Settings → Authorized domains**.
-5. Create a **Cloud Firestore** database.
-6. Publish the rules from `firestore.rules`.
+1. Enable **Google** under Authentication sign-in methods.
+2. Enable **Email/Password**.
+3. Add the GitHub Pages hostname and any future Church Chatter custom domain to **Authorized domains**.
+4. Create the Cloud Firestore database.
+5. Publish the repository's current `firestore.rules`.
 
-If using Firebase CLI, the included `firebase.json` and `.firebaserc` are intentionally limited to Firestore rules:
+Using Firebase CLI:
 
 ```bash
 firebase deploy --only firestore:rules
@@ -133,9 +154,7 @@ firebase deploy --only firestore:rules
 
 ## GitHub Pages
 
-The app is intentionally static and can be served directly from the repository root. In repository settings, configure GitHub Pages to deploy from the `main` branch root.
-
-Hash-based navigation is used so no server-side route rewriting is required.
+The app is static and can be served from the repository root. Hash-based routing avoids server-side rewrite requirements.
 
 ## Data model
 
@@ -164,16 +183,17 @@ churches/{churchId}/groups/{groupId}/members/{uid}
 churches/{churchId}/groups/{groupId}/chatter/{postId}
 churches/{churchId}/groups/{groupId}/prayers/{prayerId}
 churches/{churchId}/groups/{groupId}/events/{eventId}
+churches/{churchId}/resources/{resourceId}
+churches/{churchId}/serveOpportunities/{opportunityId}
+churches/{churchId}/serveOpportunities/{opportunityId}/signups/{uid}
+churches/{churchId}/settings/sundayHub
+churches/{churchId}/reports/{reportId}
 
 inviteCodes/{code}
 ```
 
-The top-level `inviteCodes` collection supports exact invitation lookup but is not listable by clients. A mirrored church-scoped invitation document allows authorized church administrators to manage their own invitation history without exposing a global directory of invitation codes.
+## Product principle
 
-## Denomination neutrality
+**Church Chatter provides the structure; the church provides the identity.**
 
-Church Chatter does not hard-code titles such as Pastor, Elder, Priest, Deacon, Minister, Bishop, or Parishioner. Churches create the roles and labels that reflect their own congregation. Role titles are separate from permissions, so a congregation's terminology never determines what the platform assumes about its theology or governance.
-
-## Phase 3 direction
-
-Phase 3 is reserved for administration and finishing work: a fuller church-admin dashboard, member moderation workflows, Sunday Hub, volunteer/Serve tools, deeper church profile resources, final accessibility/performance polish, and production-readiness review.
+The platform does not hard-code denominational offices, theology, worship terminology, or ministry structure. A congregation's title for a role never determines its permissions.
