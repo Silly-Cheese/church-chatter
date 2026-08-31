@@ -1,4 +1,10 @@
+// Church Chatter Mail Service
+// Complete copy/paste version — v2.1.0
+// Firebase Authentication remains the source of truth for password resets.
+// Apps Script generates the secure Firebase action link and sends the branded email.
+
 const CHURCH_CHATTER = Object.freeze({
+  VERSION: '2.1.0',
   PROJECT_ID: 'church-chattrd',
   APP_URL: 'https://silly-cheese.github.io/church-chatter/',
   ACTION_HANDLER_URL: 'https://silly-cheese.github.io/church-chatter/auth-action.html',
@@ -11,10 +17,19 @@ const CHURCH_CHATTER = Object.freeze({
 
 function doGet(e) {
   const action = String((e && e.parameter && e.parameter.action) || '').toLowerCase();
+
   if (action === 'health') {
-    return json_({ ok: true, service: 'Church Chatter Mail Service' });
+    return json_({
+      ok: true,
+      service: 'Church Chatter Mail Service',
+      version: CHURCH_CHATTER.VERSION
+    });
   }
-  return json_({ ok: true });
+
+  return json_({
+    ok: true,
+    service: 'Church Chatter Mail Service'
+  });
 }
 
 function doPost(e) {
@@ -32,81 +47,136 @@ function doPost(e) {
     }
 
     const resetLink = generatePasswordResetLink_(email);
-    if (resetLink) sendPasswordResetEmail_(email, resetLink);
+    if (resetLink) {
+      sendPasswordResetEmail_(email, resetLink);
+    }
   } catch (error) {
-    console.error('Church Chatter mail request failed', error && error.stack ? error.stack : error);
+    console.error(
+      'Church Chatter mail request failed',
+      error && error.stack ? error.stack : error
+    );
   }
 
-  // Deliberately identical for valid users, unknown users, throttled requests, and errors.
+  // Keep this response identical for valid users, unknown users, throttled
+  // requests, and internal errors. This prevents account enumeration.
   return genericResponse_();
 }
 
 /**
  * MANUAL DIAGNOSTIC #1
- * Run this directly from the Apps Script editor first.
- * Set a private Script Property named TEST_EMAIL before running it.
- * This proves MailApp permission/quota without involving Firebase.
+ *
+ * Before running:
+ * Apps Script → Project Settings → Script properties
+ * Add:
+ *   TEST_EMAIL = an email address you control
+ *
+ * This test ONLY verifies MailApp. It does not contact Firebase.
  */
 function testMailOnly() {
   const email = getTestEmail_();
 
+  if (MailApp.getRemainingDailyQuota() < 1) {
+    throw new Error('Apps Script email quota is exhausted for today.');
+  }
+
   MailApp.sendEmail({
     to: email,
     subject: 'Church Chatter mail test',
-    body: 'Church Chatter MailApp is working. This test does not use Firebase.',
-    htmlBody: '<div style="font-family:Arial,sans-serif;padding:24px"><h2 style="color:#16352f">Church Chatter</h2><p>MailApp is working correctly.</p><p>This test did not use Firebase Authentication.</p></div>',
+    body: [
+      'Church Chatter',
+      '',
+      'MailApp is working correctly.',
+      '',
+      'This diagnostic message did not use Firebase Authentication.'
+    ].join('\n'),
+    htmlBody: [
+      '<div style="font-family:Arial,Helvetica,sans-serif;background:#f3f6f4;padding:32px">',
+      '<div style="max-width:560px;margin:auto;background:#fff;border:1px solid #dfe7e3;border-radius:18px;padding:30px">',
+      '<h2 style="margin:0 0 12px;color:#16352f">Church Chatter</h2>',
+      '<p style="margin:0 0 8px;color:#43544e">MailApp is working correctly.</p>',
+      '<p style="margin:0;color:#71807a">This diagnostic message did not use Firebase Authentication.</p>',
+      '</div></div>'
+    ].join(''),
     name: CHURCH_CHATTER.SENDER_NAME
   });
 
-  console.log('Mail-only test sent to ' + email + '. Remaining daily quota: ' + MailApp.getRemainingDailyQuota());
+  console.log(
+    'Mail-only test sent to ' + email +
+    '. Remaining daily quota: ' + MailApp.getRemainingDailyQuota()
+  );
 }
 
 /**
  * MANUAL DIAGNOSTIC #2
- * Run this after testMailOnly succeeds.
- * Set TEST_EMAIL to an address that exists in Firebase Authentication with Email/Password.
+ *
+ * Run this only after testMailOnly() succeeds.
+ * TEST_EMAIL must belong to a Firebase Authentication Email/Password account.
  */
 function testPasswordResetFlow() {
   const email = getTestEmail_();
 
-  console.log('Testing Firebase password-reset link generation for ' + email + '…');
+  console.log(
+    'Testing Firebase password-reset link generation for ' + email + '…'
+  );
+
   const resetLink = generatePasswordResetLink_(email);
 
   if (!resetLink) {
-    throw new Error('Firebase did not find an eligible email/password account for ' + email + '. Use an address that exists in Firebase Authentication with the Email/Password provider.');
+    throw new Error(
+      'Firebase did not find an eligible Email/Password account for ' + email + '.'
+    );
   }
 
-  console.log('Firebase reset link generated successfully. Sending Church Chatter email…');
+  console.log(
+    'Firebase reset link generated successfully. Sending Church Chatter email…'
+  );
+
   sendPasswordResetEmail_(email, resetLink);
-  console.log('Full password-reset test sent successfully to ' + email + '.');
+
+  console.log(
+    'Full password-reset test sent successfully to ' + email + '.'
+  );
 }
 
 /**
- * Optional quick diagnostic that does not send anything.
+ * Optional diagnostic. Sends nothing.
  */
 function diagnosticStatus() {
   const properties = PropertiesService.getScriptProperties();
+
   console.log(JSON.stringify({
+    service: 'Church Chatter Mail Service',
+    version: CHURCH_CHATTER.VERSION,
     projectId: CHURCH_CHATTER.PROJECT_ID,
-    testEmailConfigured: Boolean(normalizeEmail_(properties.getProperty('TEST_EMAIL'))),
+    testEmailConfigured: Boolean(
+      normalizeEmail_(properties.getProperty('TEST_EMAIL'))
+    ),
     remainingDailyMailQuota: MailApp.getRemainingDailyQuota()
   }));
 }
 
 function getTestEmail_() {
-  const value = PropertiesService.getScriptProperties().getProperty('TEST_EMAIL');
+  const value = PropertiesService
+    .getScriptProperties()
+    .getProperty('TEST_EMAIL');
+
   const email = normalizeEmail_(value);
+
   if (!email) {
-    throw new Error('Set a Script Property named TEST_EMAIL to the address you want to test. Apps Script → Project Settings → Script properties.');
+    throw new Error(
+      'Set a Script Property named TEST_EMAIL before running diagnostics. ' +
+      'Apps Script → Project Settings → Script properties.'
+    );
   }
+
   return email;
 }
 
 function generatePasswordResetLink_(email) {
-  // The privileged returnOobLink flow must use the project-scoped Identity Toolkit endpoint.
-  const endpoint = 'https://identitytoolkit.googleapis.com/v1/projects/'
-    + encodeURIComponent(CHURCH_CHATTER.PROJECT_ID)
-    + '/accounts:sendOobCode';
+  const endpoint =
+    'https://identitytoolkit.googleapis.com/v1/projects/' +
+    encodeURIComponent(CHURCH_CHATTER.PROJECT_ID) +
+    '/accounts:sendOobCode';
 
   const payload = {
     requestType: 'PASSWORD_RESET',
@@ -127,27 +197,45 @@ function generatePasswordResetLink_(email) {
 
   const status = response.getResponseCode();
   const raw = response.getContentText() || '{}';
+
   let body = {};
   try {
     body = JSON.parse(raw);
-  } catch (_) {}
+  } catch (_) {
+    body = {};
+  }
 
   if (status >= 200 && status < 300 && body.oobLink) {
     return rewriteActionLink_(body.oobLink);
   }
 
-  const message = String(body && body.error && body.error.message || raw || 'Unknown Identity Toolkit error');
-  if (message.includes('EMAIL_NOT_FOUND') || message.includes('USER_NOT_FOUND')) {
+  const message = String(
+    (body && body.error && body.error.message) ||
+    raw ||
+    'Unknown Identity Toolkit error'
+  );
+
+  if (
+    message.includes('EMAIL_NOT_FOUND') ||
+    message.includes('USER_NOT_FOUND')
+  ) {
     return null;
   }
 
-  throw new Error('Firebase action-link request failed (' + status + '): ' + message);
+  throw new Error(
+    'Firebase action-link request failed (' + status + '): ' + message
+  );
 }
 
 function rewriteActionLink_(firebaseLink) {
   const queryIndex = firebaseLink.indexOf('?');
-  if (queryIndex === -1) throw new Error('Firebase returned an invalid action link.');
-  return CHURCH_CHATTER.ACTION_HANDLER_URL + firebaseLink.substring(queryIndex);
+
+  if (queryIndex === -1) {
+    throw new Error('Firebase returned an invalid action link.');
+  }
+
+  return CHURCH_CHATTER.ACTION_HANDLER_URL +
+    firebaseLink.substring(queryIndex);
 }
 
 function sendPasswordResetEmail_(email, resetLink) {
@@ -156,6 +244,7 @@ function sendPasswordResetEmail_(email, resetLink) {
   }
 
   const subject = 'Reset your Church Chatter password';
+
   const plainText = [
     'Church Chatter',
     '',
@@ -166,7 +255,8 @@ function sendPasswordResetEmail_(email, resetLink) {
     'Reset your password:',
     resetLink,
     '',
-    'If you did not request this, you can safely ignore this message. Your password will not change unless the secure link is used.',
+    'If you did not request this, you can safely ignore this message.',
+    'Your password will not change unless the secure link is used.',
     '',
     'Church Chatter',
     'Your church. Your community. Connected all week.'
@@ -180,12 +270,16 @@ function sendPasswordResetEmail_(email, resetLink) {
     name: CHURCH_CHATTER.SENDER_NAME
   };
 
-  if (CHURCH_CHATTER.REPLY_TO) options.replyTo = CHURCH_CHATTER.REPLY_TO;
+  if (CHURCH_CHATTER.REPLY_TO) {
+    options.replyTo = CHURCH_CHATTER.REPLY_TO;
+  }
+
   MailApp.sendEmail(options);
 }
 
 function passwordResetHtml_(resetLink) {
   const safeLink = htmlEscape_(resetLink);
+
   return `<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f3f6f4;font-family:Arial,Helvetica,sans-serif;color:#10201c;">
@@ -239,31 +333,62 @@ function passwordResetHtml_(resetLink) {
 
 function allowRequest_(email) {
   const cache = CacheService.getScriptCache();
-  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, email.toLowerCase());
-  const emailKey = 'pwd:' + Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, '').substring(0, 32);
-  if (cache.get(emailKey)) return false;
+
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    email.toLowerCase()
+  );
+
+  const emailKey = 'pwd:' +
+    Utilities.base64EncodeWebSafe(digest)
+      .replace(/=+$/g, '')
+      .substring(0, 32);
+
+  if (cache.get(emailKey)) {
+    return false;
+  }
 
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(1500)) return false;
+
+  if (!lock.tryLock(1500)) {
+    return false;
+  }
 
   try {
     const properties = PropertiesService.getScriptProperties();
     const now = Math.floor(Date.now() / 1000);
-    let windowStart = Number(properties.getProperty('MAIL_WINDOW_START') || 0);
-    let count = Number(properties.getProperty('MAIL_WINDOW_COUNT') || 0);
 
-    if (!windowStart || now - windowStart >= CHURCH_CHATTER.GLOBAL_WINDOW_SECONDS) {
+    let windowStart = Number(
+      properties.getProperty('MAIL_WINDOW_START') || 0
+    );
+
+    let count = Number(
+      properties.getProperty('MAIL_WINDOW_COUNT') || 0
+    );
+
+    if (
+      !windowStart ||
+      now - windowStart >= CHURCH_CHATTER.GLOBAL_WINDOW_SECONDS
+    ) {
       windowStart = now;
       count = 0;
     }
 
-    if (count >= CHURCH_CHATTER.GLOBAL_WINDOW_LIMIT) return false;
+    if (count >= CHURCH_CHATTER.GLOBAL_WINDOW_LIMIT) {
+      return false;
+    }
 
     properties.setProperties({
       MAIL_WINDOW_START: String(windowStart),
       MAIL_WINDOW_COUNT: String(count + 1)
     });
-    cache.put(emailKey, '1', CHURCH_CHATTER.PER_EMAIL_COOLDOWN_SECONDS);
+
+    cache.put(
+      emailKey,
+      '1',
+      CHURCH_CHATTER.PER_EMAIL_COOLDOWN_SECONDS
+    );
+
     return true;
   } finally {
     lock.releaseLock();
@@ -271,8 +396,14 @@ function allowRequest_(email) {
 }
 
 function normalizeEmail_(value) {
-  const email = String(value || '').trim().toLowerCase().substring(0, 254);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+  const email = String(value || '')
+    .trim()
+    .toLowerCase()
+    .substring(0, 254);
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    ? email
+    : '';
 }
 
 function htmlEscape_(value) {
@@ -287,7 +418,8 @@ function htmlEscape_(value) {
 function genericResponse_() {
   return json_({
     ok: true,
-    message: 'If an eligible Church Chatter account exists for that email, reset instructions will be sent.'
+    message:
+      'If an eligible Church Chatter account exists for that email, reset instructions will be sent.'
   });
 }
 
