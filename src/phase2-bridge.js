@@ -87,8 +87,9 @@ async function enhanceHome() {
   const routeView = document.querySelector("#route-view");
   if (!routeView || !phaseState) return;
   removePhaseOnePlaceholders();
-  if (!document.querySelector("#home-community")) {
-    const host = document.createElement("section");
+  let host = document.querySelector("#home-community");
+  if (!host) {
+    host = document.createElement("section");
     host.id = "home-community";
     host.className = "phase2-home mt-28";
     const hero = routeView.querySelector(".hero-card");
@@ -101,12 +102,18 @@ async function enhanceHome() {
     if (paragraph?.textContent.includes("membership, church identity")) paragraph.textContent = "Your church community is alive here all week — conversations, prayer, gatherings, groups, and the updates that keep everyone connected.";
   }
   await mountCommunityHome(options());
+  host.dataset.phase2Ready = "true";
 }
 
 async function mountRoute() {
   const rawRoute = hashRoute();
   unlockNavigation();
   if (!auth.currentUser) return;
+
+  const existingView = document.querySelector("#route-view");
+  if (isCommunityRoute(rawRoute) && existingView?.dataset.phase2Route === rawRoute && mountingKey) return;
+  if (rawRoute === "home" && document.querySelector("#home-community")?.dataset.phase2Ready === "true") return;
+
   phaseState = await loadState();
   if (!phaseState?.context?.church) return;
   phaseState.route = rawRoute;
@@ -114,7 +121,6 @@ async function mountRoute() {
   if (isCommunityRoute(rawRoute)) {
     const view = document.querySelector("#route-view");
     if (!view) return;
-    const key = `${phaseState.activeChurchId}:${rawRoute}:${view.dataset.phase2Mount || "new"}`;
     if (view.dataset.phase2Route !== rawRoute) {
       destroyCommunityBindings();
       view.dataset.phase2Route = rawRoute;
@@ -154,10 +160,18 @@ document.addEventListener("click", (event) => {
   }
 }, true);
 
-window.addEventListener("hashchange", scheduleEnhance);
+window.addEventListener("hashchange", () => {
+  mountingKey = "";
+  scheduleEnhance();
+});
 
 const observer = new MutationObserver(scheduleEnhance);
 observer.observe(document.querySelector("#app"), { childList: true, subtree: true });
 
-window.addEventListener("church-chatter-phase2-refresh", scheduleEnhance);
+window.addEventListener("church-chatter-phase2-refresh", () => {
+  mountingKey = "";
+  document.querySelector("#home-community")?.removeAttribute("data-phase2-ready");
+  scheduleEnhance();
+});
+
 scheduleEnhance();
