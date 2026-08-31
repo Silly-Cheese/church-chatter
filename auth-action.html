@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#16352f" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Church Chatter · Account Security</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,600;6..72,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="auth-action.css" />
+</head>
+<body>
+  <main class="auth-page">
+    <section class="auth-brand" aria-label="Church Chatter">
+      <div class="brand-mark">CC</div>
+      <div>
+        <strong>Church Chatter</strong>
+        <span>Your church. Connected all week.</span>
+      </div>
+    </section>
+
+    <section class="auth-card" id="auth-action-card" aria-live="polite">
+      <div class="loading-mark" aria-hidden="true"></div>
+      <p class="eyebrow">Account security</p>
+      <h1>Checking your secure link…</h1>
+      <p class="supporting">This will only take a moment.</p>
+    </section>
+
+    <p class="security-note">Church Chatter will never ask you to send your password by email.</p>
+  </main>
+  <script type="module" src="src/auth-action.js"></script>
+</body>
+</html>
