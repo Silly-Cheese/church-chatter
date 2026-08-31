@@ -75,6 +75,10 @@ function navButton(route, icon, label) {
   button.className = `nav-item phase3-nav ${hashRoute() === route ? "active" : ""}`;
   button.dataset.route = route;
   button.innerHTML = `<span class="nav-icon">${icon}</span><span>${label}</span>`;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    navigate(route);
+  });
   return button;
 }
 
@@ -99,13 +103,20 @@ function injectNavigation() {
 
 function injectMobileNavigation() {
   const mobile = document.querySelector(".mobile-nav");
-  if (!mobile || mobile.querySelector('[data-route="serve"]')) return;
-  const buttons = mobile.querySelectorAll("button");
-  if (buttons.length >= 5) {
-    const serve = document.createElement("button");
-    serve.dataset.route = "serve";
-    serve.innerHTML = `<span>🤝</span>Serve`;
-    buttons[3]?.replaceWith(serve);
+  if (!mobile) return;
+  let serve = mobile.querySelector('[data-route="serve"]');
+  if (!serve) {
+    const buttons = mobile.querySelectorAll("button");
+    if (buttons.length >= 5) {
+      serve = document.createElement("button");
+      serve.dataset.route = "serve";
+      serve.innerHTML = `<span>🤝</span>Serve`;
+      serve.addEventListener("click", (event) => {
+        event.preventDefault();
+        navigate("serve");
+      });
+      buttons[3]?.replaceWith(serve);
+    }
   }
   mobile.querySelectorAll("button[data-route]").forEach((button) => button.classList.toggle("active", button.dataset.route === hashRoute()));
 }
