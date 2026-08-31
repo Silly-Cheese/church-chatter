@@ -10,6 +10,12 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    function isCreator(churchId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/churches/$(churchId))
+        && get(/databases/$(database)/documents/churches/$(churchId)).data.createdBy == request.auth.uid;
+    }
+
     function memberPath(churchId, uid) {
       return /databases/$(database)/documents/churches/$(churchId)/members/$(uid);
     }
@@ -170,11 +176,13 @@ service cloud.firestore {
         allow create: if isSelf(uid)
           && existsAfter(memberPath(churchId, uid))
           && getAfter(memberPath(churchId, uid)).data.status == 'active';
-        allow update, delete: if isSelf(uid);
+        allow update: if isSelf(uid);
+        allow delete: if isSelf(uid) || isCreator(churchId);
       }
 
       match /activity/{churchId} {
-        allow read, create, update, delete: if isSelf(uid);
+        allow read, create, update: if isSelf(uid);
+        allow delete: if isSelf(uid) || isCreator(churchId);
       }
     }
 
@@ -215,7 +223,7 @@ service cloud.firestore {
         && getAfter(memberPath(churchId, request.auth.uid)).data.status == 'active'
         && getAfter(memberPath(churchId, request.auth.uid)).data.joinedViaInvite is string;
 
-      allow delete: if false;
+      allow delete: if isCreator(churchId);
 
       match /members/{uid} {
         allow get: if isMember(churchId) || isSelf(uid);
@@ -779,6 +787,13 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      // Original congregation creators receive only cleanup read/delete authority over descendants.
+      // This lets the client recursively erase Firestore subcollections without granting a general
+      // creator override for normal create/update administration.
+      match /{document=**} {
+        allow read, delete: if isCreator(churchId);
+      }
     }
 
     match /inviteCodes/{code} {
@@ -807,7 +822,8 @@ service cloud.firestore {
         && existsAfter(memberPath(resource.data.churchId, request.auth.uid))
         && getAfter(memberPath(resource.data.churchId, request.auth.uid)).data.joinedViaInvite == code;
 
-      allow delete: if hasPermission(resource.data.churchId, 'manageInvites');
+      allow delete: if hasPermission(resource.data.churchId, 'manageInvites')
+        || isCreator(resource.data.churchId);
     }
 
     match /{document=**} {
