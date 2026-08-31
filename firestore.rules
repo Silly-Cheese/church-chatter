@@ -86,7 +86,11 @@ service cloud.firestore {
       allow delete: if false;
 
       match /members/{uid} {
-        allow read: if isMember(churchId);
+        // Members can list their congregation. A signed-in person may only fetch
+        // their own member record before joining so invite transactions can safely
+        // check whether they already belong to the church.
+        allow get: if isMember(churchId) || isSelf(uid);
+        allow list: if isMember(churchId);
 
         // The creator can bootstrap themselves as owner in the same atomic batch.
         // Everyone else must enter through a valid invitation transaction.
