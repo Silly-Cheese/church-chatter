@@ -25,11 +25,6 @@ service cloud.firestore {
         && permission in get(memberPath(churchId, request.auth.uid)).data.effectivePermissions;
     }
 
-    function isOwner(churchId) {
-      return isMember(churchId)
-        && 'owner' in get(memberPath(churchId, request.auth.uid)).data.roleIds;
-    }
-
     function bootstrapChurch(churchId) {
       return signedIn()
         && existsAfter(/databases/$(database)/documents/churches/$(churchId))
@@ -78,7 +73,16 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.status == 'active';
 
-      allow update: if hasPermission(churchId, 'manageChurch');
+      // Ordinary edits require manageChurch. The only pre-membership update allowed
+      // is the atomic member-count increment tied to a successful invitation join.
+      allow update: if hasPermission(churchId, 'manageChurch') || (
+        signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
+        && request.resource.data.memberCount == resource.data.memberCount + 1
+        && existsAfter(memberPath(churchId, request.auth.uid))
+        && getAfter(memberPath(churchId, request.auth.uid)).data.status == 'active'
+        && getAfter(memberPath(churchId, request.auth.uid)).data.joinedViaInvite is string
+      );
       allow delete: if false;
 
       match /members/{uid} {
@@ -90,12 +94,20 @@ service cloud.firestore {
           (
             bootstrapChurch(churchId)
             && request.resource.data.createdBy == request.auth.uid
+            && 'owner' in request.resource.data.roleIds
             && request.resource.data.roleIds.hasOnly(['owner'])
           )
           ||
           (
             request.resource.data.status == 'active'
+            && 'member' in request.resource.data.roleIds
             && request.resource.data.roleIds.hasOnly(['member'])
+            && request.resource.data.effectivePermissions.hasAll([
+              'readCommunity',
+              'postChatter',
+              'createPrayer',
+              'rsvpEvents'
+            ])
             && request.resource.data.effectivePermissions.hasOnly([
               'readCommunity',
               'postChatter',
