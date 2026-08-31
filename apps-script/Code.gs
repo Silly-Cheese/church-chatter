@@ -34,20 +34,65 @@ function doPost(e) {
     const resetLink = generatePasswordResetLink_(email);
     if (resetLink) sendPasswordResetEmail_(email, resetLink);
   } catch (error) {
-    console.error('Church Chatter mail request failed', error);
+    console.error('Church Chatter mail request failed', error && error.stack ? error.stack : error);
   }
 
   // Deliberately identical for valid users, unknown users, throttled requests, and errors.
   return genericResponse_();
 }
 
+/**
+ * MANUAL DIAGNOSTIC #1
+ * Run this directly from the Apps Script editor first.
+ * It proves that the script has permission/quota to send mail without involving Firebase.
+ */
+function testMailOnly() {
+  const email = Session.getEffectiveUser().getEmail();
+  if (!email) throw new Error('Apps Script could not determine the executing Google account email.');
+
+  MailApp.sendEmail({
+    to: email,
+    subject: 'Church Chatter mail test',
+    body: 'Church Chatter MailApp is working. This test does not use Firebase.',
+    htmlBody: '<div style="font-family:Arial,sans-serif;padding:24px"><h2 style="color:#16352f">Church Chatter</h2><p>MailApp is working correctly.</p><p>This test did not use Firebase Authentication.</p></div>',
+    name: CHURCH_CHATTER.SENDER_NAME
+  });
+
+  console.log('Mail-only test sent to ' + email + '. Remaining daily quota: ' + MailApp.getRemainingDailyQuota());
+}
+
+/**
+ * MANUAL DIAGNOSTIC #2
+ * Run this after testMailOnly succeeds.
+ * It generates a real Firebase password-reset link and sends the branded email to the
+ * Google account currently executing this Apps Script project.
+ */
+function testPasswordResetFlow() {
+  const email = Session.getEffectiveUser().getEmail();
+  if (!email) throw new Error('Apps Script could not determine the executing Google account email.');
+
+  console.log('Testing Firebase password-reset link generation for ' + email + '…');
+  const resetLink = generatePasswordResetLink_(email);
+
+  if (!resetLink) {
+    throw new Error('Firebase did not find an eligible email/password account for ' + email + '. Use an address that exists in Firebase Authentication with the Email/Password provider.');
+  }
+
+  console.log('Firebase reset link generated successfully. Sending Church Chatter email…');
+  sendPasswordResetEmail_(email, resetLink);
+  console.log('Full password-reset test sent successfully to ' + email + '.');
+}
+
 function generatePasswordResetLink_(email) {
-  const endpoint = 'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode';
+  // The privileged returnOobLink flow must use the project-scoped Identity Toolkit endpoint.
+  const endpoint = 'https://identitytoolkit.googleapis.com/v1/projects/'
+    + encodeURIComponent(CHURCH_CHATTER.PROJECT_ID)
+    + '/accounts:sendOobCode';
+
   const payload = {
     requestType: 'PASSWORD_RESET',
     email: email,
     continueUrl: CHURCH_CHATTER.APP_URL,
-    targetProjectId: CHURCH_CHATTER.PROJECT_ID,
     returnOobLink: true
   };
 
@@ -62,21 +107,22 @@ function generatePasswordResetLink_(email) {
   });
 
   const status = response.getResponseCode();
+  const raw = response.getContentText() || '{}';
   let body = {};
   try {
-    body = JSON.parse(response.getContentText() || '{}');
+    body = JSON.parse(raw);
   } catch (_) {}
 
   if (status >= 200 && status < 300 && body.oobLink) {
     return rewriteActionLink_(body.oobLink);
   }
 
-  const message = String(body && body.error && body.error.message || '');
+  const message = String(body && body.error && body.error.message || raw || 'Unknown Identity Toolkit error');
   if (message.includes('EMAIL_NOT_FOUND') || message.includes('USER_NOT_FOUND')) {
     return null;
   }
 
-  throw new Error('Firebase action-link request failed: ' + status + ' ' + message);
+  throw new Error('Firebase action-link request failed (' + status + '): ' + message);
 }
 
 function rewriteActionLink_(firebaseLink) {
