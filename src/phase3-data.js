@@ -9,6 +9,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -24,7 +25,7 @@ function safeUrl(value) {
   if (!text) return "";
   try {
     const url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported URL');
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error("Unsupported URL");
     return url.toString();
   } catch (_) {
     throw new Error("Enter a valid http or https link.");
@@ -67,7 +68,10 @@ export async function createResource(churchId, user, input) {
 
 export async function updateResource(churchId, resourceId, input) {
   const patch = { updatedAt: serverTimestamp() };
-  if (input.title !== undefined) patch.title = clean(input.title, 120);
+  if (input.title !== undefined) {
+    patch.title = clean(input.title, 120);
+    if (!patch.title) throw new Error("Resource title is required.");
+  }
   if (input.description !== undefined) patch.description = clean(input.description, 800);
   if (input.category !== undefined) patch.category = clean(input.category, 60) || "Other";
   if (input.kind !== undefined) patch.kind = ["link", "sermon", "study", "document", "form"].includes(input.kind) ? input.kind : "link";
@@ -98,6 +102,7 @@ export async function createServeOpportunity(churchId, user, input) {
     location: clean(input.location, 180),
     startAt: input.startAt,
     slots,
+    signupCount: 0,
     status: "open",
     createdBy: user.uid,
     createdAt: serverTimestamp()
@@ -107,7 +112,10 @@ export async function createServeOpportunity(churchId, user, input) {
 
 export async function updateServeOpportunity(churchId, opportunityId, patch) {
   const data = { updatedAt: serverTimestamp() };
-  if (patch.title !== undefined) data.title = clean(patch.title, 120);
+  if (patch.title !== undefined) {
+    data.title = clean(patch.title, 120);
+    if (!data.title) throw new Error("Opportunity title is required.");
+  }
   if (patch.team !== undefined) data.team = clean(patch.team, 80);
   if (patch.description !== undefined) data.description = clean(patch.description, 1600);
   if (patch.location !== undefined) data.location = clean(patch.location, 180);
@@ -118,28 +126,60 @@ export async function updateServeOpportunity(churchId, opportunityId, patch) {
 }
 
 export async function getServeSignupState(churchId, opportunityId, uid) {
-  const signupRef = doc(db, "churches", churchId, "serveOpportunities", opportunityId, "signups", uid);
-  const [mine, all] = await Promise.all([
-    getDoc(signupRef),
-    getDocs(collection(db, "churches", churchId, "serveOpportunities", opportunityId, "signups"))
-  ]);
+  const opportunityRef = churchDoc(churchId, "serveOpportunities", opportunityId);
+  const signupRef = doc(opportunityRef, "signups", uid);
+  const [opportunity, mine] = await Promise.all([getDoc(opportunityRef), getDoc(signupRef)]);
+  if (!opportunity.exists()) throw new Error("That serving opportunity no longer exists.");
   return {
     signedUp: mine.exists(),
-    count: all.size,
-    signups: mapSnapshot(all)
+    count: Math.max(0, Number(opportunity.data().signupCount || 0))
   };
 }
 
+export async function listServeSignups(churchId, opportunityId) {
+  const snapshot = await getDocs(collection(db, "churches", churchId, "serveOpportunities", opportunityId, "signups"));
+  return mapSnapshot(snapshot).sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+}
+
 export async function signUpToServe(churchId, opportunityId, user, member) {
-  await setDoc(doc(db, "churches", churchId, "serveOpportunities", opportunityId, "signups", user.uid), {
-    uid: user.uid,
-    displayName: clean(member.displayName || user.displayName || "Member", 80),
-    joinedAt: serverTimestamp()
+  const opportunityRef = churchDoc(churchId, "serveOpportunities", opportunityId);
+  const signupRef = doc(opportunityRef, "signups", user.uid);
+  return runTransaction(db, async (transaction) => {
+    const [opportunitySnap, signupSnap] = await Promise.all([
+      transaction.get(opportunityRef),
+      transaction.get(signupRef)
+    ]);
+    if (!opportunitySnap.exists()) throw new Error("That serving opportunity no longer exists.");
+    if (signupSnap.exists()) return true;
+    const opportunity = opportunitySnap.data();
+    if (opportunity.status !== "open") throw new Error("Signups are closed for this opportunity.");
+    const count = Math.max(0, Number(opportunity.signupCount || 0));
+    const slots = Math.max(1, Number(opportunity.slots || 1));
+    if (count >= slots) throw new Error("That serving team is already full.");
+    transaction.set(signupRef, {
+      uid: user.uid,
+      displayName: clean(member.displayName || user.displayName || "Member", 80),
+      joinedAt: serverTimestamp()
+    });
+    transaction.update(opportunityRef, { signupCount: count + 1 });
+    return true;
   });
 }
 
 export async function withdrawFromServe(churchId, opportunityId, uid) {
-  await deleteDoc(doc(db, "churches", churchId, "serveOpportunities", opportunityId, "signups", uid));
+  const opportunityRef = churchDoc(churchId, "serveOpportunities", opportunityId);
+  const signupRef = doc(opportunityRef, "signups", uid);
+  return runTransaction(db, async (transaction) => {
+    const [opportunitySnap, signupSnap] = await Promise.all([
+      transaction.get(opportunityRef),
+      transaction.get(signupRef)
+    ]);
+    if (!signupSnap.exists()) return false;
+    const count = opportunitySnap.exists() ? Math.max(0, Number(opportunitySnap.data().signupCount || 0)) : 0;
+    transaction.delete(signupRef);
+    if (opportunitySnap.exists()) transaction.update(opportunityRef, { signupCount: Math.max(0, count - 1) });
+    return true;
+  });
 }
 
 export async function getSundayHub(churchId) {
