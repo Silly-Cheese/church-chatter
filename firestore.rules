@@ -25,6 +25,40 @@ service cloud.firestore {
         && permission in get(memberPath(churchId, request.auth.uid)).data.effectivePermissions;
     }
 
+    function isOwner(churchId) {
+      return isMember(churchId)
+        && 'owner' in get(memberPath(churchId, request.auth.uid)).data.roleIds;
+    }
+
+    function ownerPermissions(perms) {
+      return perms.hasAll([
+        'manageChurch', 'manageMembers', 'manageRoles', 'manageInvites',
+        'moderateContent', 'createAnnouncements', 'manageEvents', 'manageGroups',
+        'viewLeadershipPrayer', 'readCommunity', 'postChatter', 'createPrayer', 'rsvpEvents'
+      ]) && perms.hasOnly([
+        'manageChurch', 'manageMembers', 'manageRoles', 'manageInvites',
+        'moderateContent', 'createAnnouncements', 'manageEvents', 'manageGroups',
+        'viewLeadershipPrayer', 'readCommunity', 'postChatter', 'createPrayer', 'rsvpEvents'
+      ]);
+    }
+
+    function memberPermissions(perms) {
+      return perms.hasAll(['readCommunity', 'postChatter', 'createPrayer', 'rsvpEvents'])
+        && perms.hasOnly(['readCommunity', 'postChatter', 'createPrayer', 'rsvpEvents']);
+    }
+
+    function containsAdministrativePermissions(perms) {
+      return perms.hasAny([
+        'manageChurch', 'manageMembers', 'manageRoles', 'manageInvites',
+        'moderateContent', 'createAnnouncements', 'manageEvents', 'manageGroups',
+        'viewLeadershipPrayer'
+      ]);
+    }
+
+    function canGrantPermissions(churchId, perms) {
+      return !containsAdministrativePermissions(perms) || hasPermission(churchId, 'manageChurch');
+    }
+
     function bootstrapChurch(churchId) {
       return signedIn()
         && existsAfter(/databases/$(database)/documents/churches/$(churchId))
@@ -50,6 +84,49 @@ service cloud.firestore {
         && getAfter(churchInvitePath(churchId, code)).data.uses == invite.data.uses + 1;
     }
 
+    function validText(value, max) {
+      return value is string && value.size() > 0 && value.size() <= max;
+    }
+
+    function groupPath(churchId, groupId) {
+      return /databases/$(database)/documents/churches/$(churchId)/groups/$(groupId);
+    }
+
+    function groupMemberPath(churchId, groupId, uid) {
+      return /databases/$(database)/documents/churches/$(churchId)/groups/$(groupId)/members/$(uid);
+    }
+
+    function isGroupMember(churchId, groupId) {
+      return isMember(churchId)
+        && exists(groupMemberPath(churchId, groupId, request.auth.uid))
+        && get(groupMemberPath(churchId, groupId, request.auth.uid)).data.status == 'active';
+    }
+
+    function isGroupLeader(churchId, groupId) {
+      return isGroupMember(churchId, groupId)
+        && get(groupMemberPath(churchId, groupId, request.auth.uid)).data.role == 'leader';
+    }
+
+    function canAccessGroup(churchId, groupId) {
+      return isGroupMember(churchId, groupId) || hasPermission(churchId, 'manageGroups');
+    }
+
+    function chatterPath(churchId, postId) {
+      return /databases/$(database)/documents/churches/$(churchId)/chatter/$(postId);
+    }
+
+    function chatterReactionPath(churchId, postId, uid) {
+      return /databases/$(database)/documents/churches/$(churchId)/chatter/$(postId)/reactions/$(uid);
+    }
+
+    function prayerPath(churchId, collectionName, prayerId) {
+      return /databases/$(database)/documents/churches/$(churchId)/$(collectionName)/$(prayerId);
+    }
+
+    function prayedPath(churchId, collectionName, prayerId, uid) {
+      return /databases/$(database)/documents/churches/$(churchId)/$(collectionName)/$(prayerId)/prayedBy/$(uid);
+    }
+
     match /users/{uid} {
       allow read, create, update: if isSelf(uid);
       allow delete: if false;
@@ -61,11 +138,13 @@ service cloud.firestore {
           && getAfter(memberPath(churchId, uid)).data.status == 'active';
         allow update, delete: if isSelf(uid);
       }
+
+      match /activity/{churchId} {
+        allow read, create, update, delete: if isSelf(uid);
+      }
     }
 
     match /churches/{churchId} {
-      // A signed-in user may fetch one church profile by exact ID. Listing all
-      // churches is deliberately denied so Church Chatter is not a public directory.
       allow get: if signedIn();
       allow list: if false;
 
@@ -73,8 +152,6 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.status == 'active';
 
-      // Ordinary edits require manageChurch. The only pre-membership update allowed
-      // is the atomic member-count increment tied to a successful invitation join.
       allow update: if hasPermission(churchId, 'manageChurch') || (
         signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
@@ -86,53 +163,33 @@ service cloud.firestore {
       allow delete: if false;
 
       match /members/{uid} {
-        // Members can list their congregation. A signed-in person may only fetch
-        // their own member record before joining so invite transactions can safely
-        // check whether they already belong to the church.
         allow get: if isMember(churchId) || isSelf(uid);
         allow list: if isMember(churchId);
 
-        // The creator can bootstrap themselves as owner in the same atomic batch.
-        // Everyone else must enter through a valid invitation transaction.
         allow create: if isSelf(uid) && (
           (
             bootstrapChurch(churchId)
             && request.resource.data.createdBy == request.auth.uid
-            && 'owner' in request.resource.data.roleIds
             && request.resource.data.roleIds.hasOnly(['owner'])
+            && ownerPermissions(request.resource.data.effectivePermissions)
           )
           ||
           (
             request.resource.data.status == 'active'
-            && 'member' in request.resource.data.roleIds
             && request.resource.data.roleIds.hasOnly(['member'])
-            && request.resource.data.effectivePermissions.hasAll([
-              'readCommunity',
-              'postChatter',
-              'createPrayer',
-              'rsvpEvents'
-            ])
-            && request.resource.data.effectivePermissions.hasOnly([
-              'readCommunity',
-              'postChatter',
-              'createPrayer',
-              'rsvpEvents'
-            ])
+            && memberPermissions(request.resource.data.effectivePermissions)
             && validInviteJoin(churchId, request.resource.data.joinedViaInvite)
           )
         );
 
-        // Members can keep their own display identity current, but cannot grant
-        // themselves roles or permissions. Role changes require manageRoles.
         allow update: if (
           isSelf(uid)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL'])
         ) || (
           hasPermission(churchId, 'manageRoles')
           && !('owner' in resource.data.roleIds)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'roleIds', 'effectivePermissions', 'rolesUpdatedAt'
-          ])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['roleIds', 'effectivePermissions', 'rolesUpdatedAt'])
+          && canGrantPermissions(churchId, request.resource.data.effectivePermissions)
         );
 
         allow delete: if hasPermission(churchId, 'manageMembers')
@@ -145,21 +202,34 @@ service cloud.firestore {
         allow create: if (
           bootstrapChurch(churchId)
           && request.resource.data.createdBy == request.auth.uid
-          && roleId in ['owner', 'member']
-        ) || hasPermission(churchId, 'manageRoles');
+          && (
+            (roleId == 'owner' && ownerPermissions(request.resource.data.permissions))
+            || (roleId == 'member' && memberPermissions(request.resource.data.permissions))
+          )
+        ) || (
+          hasPermission(churchId, 'manageRoles')
+          && roleId != 'owner'
+          && canGrantPermissions(churchId, request.resource.data.permissions)
+        );
 
-        allow update: if hasPermission(churchId, 'manageRoles') && roleId != 'owner';
+        allow update: if roleId == 'member'
+          && hasPermission(churchId, 'manageRoles')
+          && request.resource.data.permissions == resource.data.permissions
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'description', 'updatedAt']);
+
+        allow update: if !(roleId in ['owner', 'member'])
+          && hasPermission(churchId, 'manageRoles')
+          && canGrantPermissions(churchId, request.resource.data.permissions);
+
         allow delete: if hasPermission(churchId, 'manageRoles')
           && !(roleId in ['owner', 'member']);
       }
 
       match /invites/{code} {
         allow read: if hasPermission(churchId, 'manageInvites');
-
         allow create: if hasPermission(churchId, 'manageInvites')
           && request.resource.data.churchId == churchId
           && request.resource.data.code == code;
-
         allow update: if hasPermission(churchId, 'manageInvites') || (
           signedIn()
           && resource.data.active == true
@@ -169,21 +239,234 @@ service cloud.firestore {
           && existsAfter(memberPath(churchId, request.auth.uid))
           && getAfter(memberPath(churchId, request.auth.uid)).data.joinedViaInvite == code
         );
-
         allow delete: if hasPermission(churchId, 'manageInvites');
+      }
+
+      match /rooms/{roomId} {
+        allow read: if hasPermission(churchId, 'readCommunity');
+        allow create: if hasPermission(churchId, 'manageGroups')
+          && validText(request.resource.data.name, 60)
+          && request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if hasPermission(churchId, 'manageGroups');
+      }
+
+      match /chatter/{postId} {
+        allow read: if hasPermission(churchId, 'readCommunity');
+
+        allow create: if hasPermission(churchId, 'postChatter')
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.authorName == get(memberPath(churchId, request.auth.uid)).data.displayName
+          && validText(request.resource.data.body, 4000)
+          && request.resource.data.reactionCount == 0
+          && request.resource.data.pinned == false;
+
+        allow update: if (
+          resource.data.authorUid == request.auth.uid
+          && validText(request.resource.data.body, 4000)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body', 'editedAt'])
+        ) || (
+          hasPermission(churchId, 'moderateContent')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned', 'moderatedAt'])
+        ) || (
+          isMember(churchId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactionCount'])
+          && (
+            (
+              request.resource.data.reactionCount == resource.data.reactionCount + 1
+              && !exists(chatterReactionPath(churchId, postId, request.auth.uid))
+              && existsAfter(chatterReactionPath(churchId, postId, request.auth.uid))
+            ) || (
+              request.resource.data.reactionCount == resource.data.reactionCount - 1
+              && request.resource.data.reactionCount >= 0
+              && exists(chatterReactionPath(churchId, postId, request.auth.uid))
+              && !existsAfter(chatterReactionPath(churchId, postId, request.auth.uid))
+            )
+          )
+        );
+
+        allow delete: if resource.data.authorUid == request.auth.uid || hasPermission(churchId, 'moderateContent');
+
+        match /comments/{commentId} {
+          allow read: if hasPermission(churchId, 'readCommunity');
+          allow create: if hasPermission(churchId, 'postChatter')
+            && request.resource.data.authorUid == request.auth.uid
+            && request.resource.data.authorName == get(memberPath(churchId, request.auth.uid)).data.displayName
+            && validText(request.resource.data.body, 1500);
+          allow update: if resource.data.authorUid == request.auth.uid
+            && validText(request.resource.data.body, 1500)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body', 'editedAt']);
+          allow delete: if resource.data.authorUid == request.auth.uid || hasPermission(churchId, 'moderateContent');
+        }
+
+        match /reactions/{uid} {
+          allow read: if hasPermission(churchId, 'readCommunity');
+          allow create: if isSelf(uid)
+            && hasPermission(churchId, 'readCommunity')
+            && getAfter(chatterPath(churchId, postId)).data.reactionCount == get(chatterPath(churchId, postId)).data.reactionCount + 1;
+          allow delete: if isSelf(uid)
+            && getAfter(chatterPath(churchId, postId)).data.reactionCount == get(chatterPath(churchId, postId)).data.reactionCount - 1;
+          allow update: if false;
+        }
+      }
+
+      match /prayers/{prayerId} {
+        allow read: if hasPermission(churchId, 'readCommunity');
+        allow create: if hasPermission(churchId, 'createPrayer')
+          && validText(request.resource.data.body, 2500)
+          && request.resource.data.status == 'open'
+          && request.resource.data.prayedCount == 0
+          && (
+            (request.resource.data.anonymous == true && request.resource.data.authorName == 'Anonymous' && !('authorUid' in request.resource.data))
+            || (request.resource.data.anonymous == false && request.resource.data.authorUid == request.auth.uid && request.resource.data.authorName == get(memberPath(churchId, request.auth.uid)).data.displayName)
+          );
+        allow update: if (
+          hasPermission(churchId, 'moderateContent')
+          || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid)
+        ) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'answeredAt']);
+        allow update: if isMember(churchId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['prayedCount'])
+          && (
+            (request.resource.data.prayedCount == resource.data.prayedCount + 1 && !exists(prayedPath(churchId, 'prayers', prayerId, request.auth.uid)) && existsAfter(prayedPath(churchId, 'prayers', prayerId, request.auth.uid)))
+            || (request.resource.data.prayedCount == resource.data.prayedCount - 1 && request.resource.data.prayedCount >= 0 && exists(prayedPath(churchId, 'prayers', prayerId, request.auth.uid)) && !existsAfter(prayedPath(churchId, 'prayers', prayerId, request.auth.uid)))
+          );
+        allow delete: if hasPermission(churchId, 'moderateContent') || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid);
+
+        match /prayedBy/{uid} {
+          allow read: if hasPermission(churchId, 'readCommunity');
+          allow create: if isSelf(uid)
+            && getAfter(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount == get(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount + 1;
+          allow delete: if isSelf(uid)
+            && getAfter(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount == get(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount - 1;
+          allow update: if false;
+        }
+      }
+
+      match /leadershipPrayers/{prayerId} {
+        allow read: if hasPermission(churchId, 'viewLeadershipPrayer');
+        allow create: if hasPermission(churchId, 'createPrayer')
+          && validText(request.resource.data.body, 2500)
+          && request.resource.data.status == 'open'
+          && request.resource.data.prayedCount == 0
+          && (
+            (request.resource.data.anonymous == true && request.resource.data.authorName == 'Anonymous' && !('authorUid' in request.resource.data))
+            || (request.resource.data.anonymous == false && request.resource.data.authorUid == request.auth.uid && request.resource.data.authorName == get(memberPath(churchId, request.auth.uid)).data.displayName)
+          );
+        allow update: if hasPermission(churchId, 'viewLeadershipPrayer') && (
+          (
+            (hasPermission(churchId, 'moderateContent') || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid))
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'answeredAt'])
+          ) || (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['prayedCount'])
+            && (
+              (request.resource.data.prayedCount == resource.data.prayedCount + 1 && !exists(prayedPath(churchId, 'leadershipPrayers', prayerId, request.auth.uid)) && existsAfter(prayedPath(churchId, 'leadershipPrayers', prayerId, request.auth.uid)))
+              || (request.resource.data.prayedCount == resource.data.prayedCount - 1 && request.resource.data.prayedCount >= 0 && exists(prayedPath(churchId, 'leadershipPrayers', prayerId, request.auth.uid)) && !existsAfter(prayedPath(churchId, 'leadershipPrayers', prayerId, request.auth.uid)))
+            )
+          )
+        );
+        allow delete: if hasPermission(churchId, 'moderateContent') || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid);
+
+        match /prayedBy/{uid} {
+          allow read: if hasPermission(churchId, 'viewLeadershipPrayer');
+          allow create: if isSelf(uid)
+            && hasPermission(churchId, 'viewLeadershipPrayer')
+            && getAfter(prayerPath(churchId, 'leadershipPrayers', prayerId)).data.prayedCount == get(prayerPath(churchId, 'leadershipPrayers', prayerId)).data.prayedCount + 1;
+          allow delete: if isSelf(uid)
+            && hasPermission(churchId, 'viewLeadershipPrayer')
+            && getAfter(prayerPath(churchId, 'leadershipPrayers', prayerId)).data.prayedCount == get(prayerPath(churchId, 'leadershipPrayers', prayerId)).data.prayedCount - 1;
+          allow update: if false;
+        }
+      }
+
+      match /announcements/{announcementId} {
+        allow read: if hasPermission(churchId, 'readCommunity');
+        allow create: if hasPermission(churchId, 'createAnnouncements')
+          && request.resource.data.createdBy == request.auth.uid
+          && validText(request.resource.data.title, 120)
+          && validText(request.resource.data.body, 3000)
+          && request.resource.data.priority in ['normal', 'important', 'urgent'];
+        allow update, delete: if hasPermission(churchId, 'createAnnouncements');
+      }
+
+      match /events/{eventId} {
+        allow read: if hasPermission(churchId, 'readCommunity');
+        allow create: if hasPermission(churchId, 'manageEvents')
+          && request.resource.data.createdBy == request.auth.uid
+          && validText(request.resource.data.title, 120)
+          && request.resource.data.status == 'scheduled';
+        allow update, delete: if hasPermission(churchId, 'manageEvents');
+
+        match /rsvps/{uid} {
+          allow read: if hasPermission(churchId, 'readCommunity');
+          allow create, update: if isSelf(uid)
+            && hasPermission(churchId, 'rsvpEvents')
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.status in ['going', 'maybe', 'not-going'];
+          allow delete: if isSelf(uid);
+        }
+      }
+
+      match /groups/{groupId} {
+        allow read: if hasPermission(churchId, 'readCommunity');
+        allow create: if hasPermission(churchId, 'manageGroups')
+          && request.resource.data.createdBy == request.auth.uid
+          && validText(request.resource.data.name, 100)
+          && request.resource.data.joinMode in ['open', 'private'];
+        allow update, delete: if hasPermission(churchId, 'manageGroups');
+
+        match /members/{uid} {
+          allow get: if isMember(churchId) && (isSelf(uid) || canAccessGroup(churchId, groupId));
+          allow list: if canAccessGroup(churchId, groupId);
+          allow create: if hasPermission(churchId, 'manageGroups') || (
+            isSelf(uid)
+            && get(groupPath(churchId, groupId)).data.joinMode == 'open'
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.role == 'member'
+            && request.resource.data.status == 'active'
+          );
+          allow update: if hasPermission(churchId, 'manageGroups');
+          allow delete: if hasPermission(churchId, 'manageGroups') || (
+            isSelf(uid) && resource.data.role != 'leader'
+          );
+        }
+
+        match /chatter/{postId} {
+          allow read: if canAccessGroup(churchId, groupId);
+          allow create: if canAccessGroup(churchId, groupId)
+            && request.resource.data.authorUid == request.auth.uid
+            && request.resource.data.authorName == get(memberPath(churchId, request.auth.uid)).data.displayName
+            && validText(request.resource.data.body, 4000);
+          allow update: if resource.data.authorUid == request.auth.uid && validText(request.resource.data.body, 4000);
+          allow delete: if resource.data.authorUid == request.auth.uid || isGroupLeader(churchId, groupId) || hasPermission(churchId, 'moderateContent');
+        }
+
+        match /prayers/{prayerId} {
+          allow read: if canAccessGroup(churchId, groupId);
+          allow create: if canAccessGroup(churchId, groupId)
+            && validText(request.resource.data.body, 2500)
+            && request.resource.data.status == 'open'
+            && (
+              (request.resource.data.anonymous == true && request.resource.data.authorName == 'Anonymous' && !('authorUid' in request.resource.data))
+              || (request.resource.data.anonymous == false && request.resource.data.authorUid == request.auth.uid && request.resource.data.authorName == get(memberPath(churchId, request.auth.uid)).data.displayName)
+            );
+          allow update, delete: if isGroupLeader(churchId, groupId) || hasPermission(churchId, 'moderateContent') || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid);
+        }
+
+        match /events/{eventId} {
+          allow read: if canAccessGroup(churchId, groupId);
+          allow create: if (isGroupLeader(churchId, groupId) || hasPermission(churchId, 'manageGroups'))
+            && request.resource.data.createdBy == request.auth.uid
+            && validText(request.resource.data.title, 120);
+          allow update, delete: if isGroupLeader(churchId, groupId) || hasPermission(churchId, 'manageGroups');
+        }
       }
     }
 
     match /inviteCodes/{code} {
-      // Exact lookup is required for someone holding an invitation code.
-      // Collection enumeration remains denied.
       allow get: if signedIn();
       allow list: if false;
-
       allow create: if signedIn()
         && request.resource.data.code == code
         && hasPermission(request.resource.data.churchId, 'manageInvites');
-
       allow update: if hasPermission(resource.data.churchId, 'manageInvites') || (
         signedIn()
         && resource.data.active == true
@@ -194,7 +477,6 @@ service cloud.firestore {
         && existsAfter(memberPath(resource.data.churchId, request.auth.uid))
         && getAfter(memberPath(resource.data.churchId, request.auth.uid)).data.joinedViaInvite == code
       );
-
       allow delete: if hasPermission(resource.data.churchId, 'manageInvites');
     }
 
