@@ -1,0 +1,189 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function memberPath(churchId, uid) {
+      return /databases/$(database)/documents/churches/$(churchId)/members/$(uid);
+    }
+
+    function isMember(churchId) {
+      return signedIn()
+        && exists(memberPath(churchId, request.auth.uid))
+        && get(memberPath(churchId, request.auth.uid)).data.status == 'active';
+    }
+
+    function hasPermission(churchId, permission) {
+      return isMember(churchId)
+        && permission in get(memberPath(churchId, request.auth.uid)).data.effectivePermissions;
+    }
+
+    function isOwner(churchId) {
+      return isMember(churchId)
+        && 'owner' in get(memberPath(churchId, request.auth.uid)).data.roleIds;
+    }
+
+    function bootstrapChurch(churchId) {
+      return signedIn()
+        && existsAfter(/databases/$(database)/documents/churches/$(churchId))
+        && getAfter(/databases/$(database)/documents/churches/$(churchId)).data.createdBy == request.auth.uid;
+    }
+
+    function invitePath(code) {
+      return /databases/$(database)/documents/inviteCodes/$(code);
+    }
+
+    function churchInvitePath(churchId, code) {
+      return /databases/$(database)/documents/churches/$(churchId)/invites/$(code);
+    }
+
+    function validInviteJoin(churchId, code) {
+      let invite = get(invitePath(code));
+      return signedIn()
+        && invite.data.churchId == churchId
+        && invite.data.active == true
+        && (invite.data.expiresAt == null || invite.data.expiresAt > request.time)
+        && invite.data.uses < invite.data.maxUses
+        && getAfter(invitePath(code)).data.uses == invite.data.uses + 1
+        && getAfter(churchInvitePath(churchId, code)).data.uses == invite.data.uses + 1;
+    }
+
+    match /users/{uid} {
+      allow read, create, update: if isSelf(uid);
+      allow delete: if false;
+
+      match /memberships/{churchId} {
+        allow read: if isSelf(uid);
+        allow create: if isSelf(uid)
+          && existsAfter(memberPath(churchId, uid))
+          && getAfter(memberPath(churchId, uid)).data.status == 'active';
+        allow update, delete: if isSelf(uid);
+      }
+    }
+
+    match /churches/{churchId} {
+      // A signed-in user may fetch one church profile by exact ID. Listing all
+      // churches is deliberately denied so Church Chatter is not a public directory.
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'active';
+
+      allow update: if hasPermission(churchId, 'manageChurch');
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow read: if isMember(churchId);
+
+        // The creator can bootstrap themselves as owner in the same atomic batch.
+        // Everyone else must enter through a valid invitation transaction.
+        allow create: if isSelf(uid) && (
+          (
+            bootstrapChurch(churchId)
+            && request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.roleIds.hasOnly(['owner'])
+          )
+          ||
+          (
+            request.resource.data.status == 'active'
+            && request.resource.data.roleIds.hasOnly(['member'])
+            && request.resource.data.effectivePermissions.hasOnly([
+              'readCommunity',
+              'postChatter',
+              'createPrayer',
+              'rsvpEvents'
+            ])
+            && validInviteJoin(churchId, request.resource.data.joinedViaInvite)
+          )
+        );
+
+        // Members can keep their own display identity current, but cannot grant
+        // themselves roles or permissions. Role changes require manageRoles.
+        allow update: if (
+          isSelf(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL'])
+        ) || (
+          hasPermission(churchId, 'manageRoles')
+          && !('owner' in resource.data.roleIds)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'roleIds', 'effectivePermissions', 'rolesUpdatedAt'
+          ])
+        );
+
+        allow delete: if hasPermission(churchId, 'manageMembers')
+          && !('owner' in resource.data.roleIds);
+      }
+
+      match /roles/{roleId} {
+        allow read: if isMember(churchId);
+
+        allow create: if (
+          bootstrapChurch(churchId)
+          && request.resource.data.createdBy == request.auth.uid
+          && roleId in ['owner', 'member']
+        ) || hasPermission(churchId, 'manageRoles');
+
+        allow update: if hasPermission(churchId, 'manageRoles') && roleId != 'owner';
+        allow delete: if hasPermission(churchId, 'manageRoles')
+          && !(roleId in ['owner', 'member']);
+      }
+
+      match /invites/{code} {
+        allow read: if hasPermission(churchId, 'manageInvites');
+
+        allow create: if hasPermission(churchId, 'manageInvites')
+          && request.resource.data.churchId == churchId
+          && request.resource.data.code == code;
+
+        allow update: if hasPermission(churchId, 'manageInvites') || (
+          signedIn()
+          && resource.data.active == true
+          && resource.data.uses < resource.data.maxUses
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uses', 'lastUsedAt'])
+          && request.resource.data.uses == resource.data.uses + 1
+          && existsAfter(memberPath(churchId, request.auth.uid))
+          && getAfter(memberPath(churchId, request.auth.uid)).data.joinedViaInvite == code
+        );
+
+        allow delete: if hasPermission(churchId, 'manageInvites');
+      }
+    }
+
+    match /inviteCodes/{code} {
+      // Exact lookup is required for someone holding an invitation code.
+      // Collection enumeration remains denied.
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.code == code
+        && hasPermission(request.resource.data.churchId, 'manageInvites');
+
+      allow update: if hasPermission(resource.data.churchId, 'manageInvites') || (
+        signedIn()
+        && resource.data.active == true
+        && resource.data.uses < resource.data.maxUses
+        && (resource.data.expiresAt == null || resource.data.expiresAt > request.time)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uses', 'lastUsedAt'])
+        && request.resource.data.uses == resource.data.uses + 1
+        && existsAfter(memberPath(resource.data.churchId, request.auth.uid))
+        && getAfter(memberPath(resource.data.churchId, request.auth.uid)).data.joinedViaInvite == code
+      );
+
+      allow delete: if hasPermission(resource.data.churchId, 'manageInvites');
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
