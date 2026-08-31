@@ -1,6 +1,6 @@
 // Paste the deployed Google Apps Script Web App /exec URL here after deployment.
 // Until then, Church Chatter will keep using Firebase's built-in reset email as a fallback.
-export const MAIL_SERVICE_URL = "";
+export const MAIL_SERVICE_URL = "https://script.google.com/macros/s/AKfycbwF0aI1oSnGQRyvRFqNb4UIeoBcmTXzdKxUk3T30dQdh0kpDVVmPAiA7BzdSsaz47yUFw/exec";
 
 export function customMailServiceEnabled() {
   return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/i.test(MAIL_SERVICE_URL.trim());
