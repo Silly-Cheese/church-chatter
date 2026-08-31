@@ -12,7 +12,8 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
-  updateDoc
+  updateDoc,
+  writeBatch
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 function clean(value, max = 500) {
@@ -46,8 +47,7 @@ function listenOrdered(ref, callback, max = 50, direction = "desc", field = "cre
 
 export function listenRooms(churchId, callback) {
   return onSnapshot(churchCollection(churchId, "rooms"), (snapshot) => {
-    const rooms = mapSnapshot(snapshot).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-    callback(rooms);
+    callback(mapSnapshot(snapshot).sort((a, b) => (a.name || "").localeCompare(b.name || "")));
   }, (error) => callback([], error));
 }
 
@@ -137,7 +137,8 @@ export async function toggleChatterReaction(churchId, postId, uid) {
   const postRef = churchDoc(churchId, "chatter", postId);
   const reactionRef = doc(db, "churches", churchId, "chatter", postId, "reactions", uid);
   return runTransaction(db, async (transaction) => {
-    const [postSnap, reactionSnap] = await Promise.all([transaction.get(postRef), transaction.get(reactionRef)]);
+    const postSnap = await transaction.get(postRef);
+    const reactionSnap = await transaction.get(reactionRef);
     if (!postSnap.exists()) throw new Error("That Chatter post no longer exists.");
     const current = Number(postSnap.data().reactionCount || 0);
     if (reactionSnap.exists()) {
@@ -194,7 +195,8 @@ export async function togglePrayed(churchId, prayerId, uid, leadershipOnly = fal
   const prayerRef = churchDoc(churchId, base, prayerId);
   const prayedRef = doc(db, "churches", churchId, base, prayerId, "prayedBy", uid);
   return runTransaction(db, async (transaction) => {
-    const [prayerSnap, prayedSnap] = await Promise.all([transaction.get(prayerRef), transaction.get(prayedRef)]);
+    const prayerSnap = await transaction.get(prayerRef);
+    const prayedSnap = await transaction.get(prayedRef);
     if (!prayerSnap.exists()) throw new Error("That prayer request no longer exists.");
     const current = Number(prayerSnap.data().prayedCount || 0);
     if (prayedSnap.exists()) {
@@ -263,6 +265,7 @@ export async function updateEvent(churchId, eventId, patch) {
   if (patch.location !== undefined) data.location = clean(patch.location, 180);
   if (patch.startAt instanceof Date) data.startAt = patch.startAt;
   if (patch.endAt === null || patch.endAt instanceof Date) data.endAt = patch.endAt;
+  if (patch.allDay !== undefined) data.allDay = Boolean(patch.allDay);
   if (patch.status && ["scheduled", "cancelled"].includes(patch.status)) data.status = patch.status;
   await updateDoc(churchDoc(churchId, "events", eventId), data);
 }
@@ -290,7 +293,9 @@ export async function createGroup(churchId, user, input) {
   const name = clean(input.name, 100);
   if (!name) throw new Error("Group name is required.");
   const ref = doc(churchCollection(churchId, "groups"));
-  await setDoc(ref, {
+  const leaderRef = doc(ref, "members", user.uid);
+  const batch = writeBatch(db);
+  batch.set(ref, {
     name,
     description: clean(input.description, 800),
     category: clean(input.category, 60),
@@ -299,7 +304,8 @@ export async function createGroup(churchId, user, input) {
     createdAt: serverTimestamp(),
     archived: false
   });
-  await setDoc(doc(ref, "members", user.uid), { uid: user.uid, role: "leader", status: "active", joinedAt: serverTimestamp() });
+  batch.set(leaderRef, { uid: user.uid, role: "leader", status: "active", joinedAt: serverTimestamp() });
+  await batch.commit();
   return ref.id;
 }
 
