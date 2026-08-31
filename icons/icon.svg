@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Church Chatter</title>
+  <rect width="512" height="512" rx="128" fill="#16352f"/>
+  <path d="M116 154c0-24.3 19.7-44 44-44h192c24.3 0 44 19.7 44 44v142c0 24.3-19.7 44-44 44H245l-79 74v-74h-6c-24.3 0-44-19.7-44-44V154Z" fill="#f7f8f5"/>
+  <path d="M214 188h84v31h-26v91h-32v-91h-26v-31Z" fill="#c88b52"/>
+  <circle cx="196" cy="254" r="14" fill="#24584d"/>
+  <circle cx="316" cy="254" r="14" fill="#24584d"/>
+</svg>
