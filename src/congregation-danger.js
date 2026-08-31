@@ -154,6 +154,12 @@ function schedule() {
   });
 }
 
+// The main app can switch congregations without changing the URL. Clear cached creator state
+// before that switch completes so a Danger Zone can never point at the previous congregation.
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-switch-church]")) state = null;
+}, true);
+
 window.addEventListener("hashchange", () => {
   state = null;
   schedule();
