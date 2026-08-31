@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#16352f" />
+  <meta name="description" content="Church Chatter keeps your church connected all week long." />
+  <title>Church Chatter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,600;6..72,700&display=swap" rel="stylesheet" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" aria-live="polite">
+    <div class="boot-screen">
+      <div class="brand-mark" aria-hidden="true">CC</div>
+      <div>
+        <strong>Church Chatter</strong>
+        <p>Gathering your community…</p>
+      </div>
+    </div>
+  </div>
+  <div id="toast-root" class="toast-root" aria-live="assertive"></div>
+  <noscript>Church Chatter requires JavaScript to run.</noscript>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
