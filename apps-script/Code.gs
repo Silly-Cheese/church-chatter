@@ -44,11 +44,11 @@ function doPost(e) {
 /**
  * MANUAL DIAGNOSTIC #1
  * Run this directly from the Apps Script editor first.
- * It proves that the script has permission/quota to send mail without involving Firebase.
+ * Set a private Script Property named TEST_EMAIL before running it.
+ * This proves MailApp permission/quota without involving Firebase.
  */
 function testMailOnly() {
-  const email = Session.getEffectiveUser().getEmail();
-  if (!email) throw new Error('Apps Script could not determine the executing Google account email.');
+  const email = getTestEmail_();
 
   MailApp.sendEmail({
     to: email,
@@ -64,12 +64,10 @@ function testMailOnly() {
 /**
  * MANUAL DIAGNOSTIC #2
  * Run this after testMailOnly succeeds.
- * It generates a real Firebase password-reset link and sends the branded email to the
- * Google account currently executing this Apps Script project.
+ * Set TEST_EMAIL to an address that exists in Firebase Authentication with Email/Password.
  */
 function testPasswordResetFlow() {
-  const email = Session.getEffectiveUser().getEmail();
-  if (!email) throw new Error('Apps Script could not determine the executing Google account email.');
+  const email = getTestEmail_();
 
   console.log('Testing Firebase password-reset link generation for ' + email + '…');
   const resetLink = generatePasswordResetLink_(email);
@@ -81,6 +79,27 @@ function testPasswordResetFlow() {
   console.log('Firebase reset link generated successfully. Sending Church Chatter email…');
   sendPasswordResetEmail_(email, resetLink);
   console.log('Full password-reset test sent successfully to ' + email + '.');
+}
+
+/**
+ * Optional quick diagnostic that does not send anything.
+ */
+function diagnosticStatus() {
+  const properties = PropertiesService.getScriptProperties();
+  console.log(JSON.stringify({
+    projectId: CHURCH_CHATTER.PROJECT_ID,
+    testEmailConfigured: Boolean(normalizeEmail_(properties.getProperty('TEST_EMAIL'))),
+    remainingDailyMailQuota: MailApp.getRemainingDailyQuota()
+  }));
+}
+
+function getTestEmail_() {
+  const value = PropertiesService.getScriptProperties().getProperty('TEST_EMAIL');
+  const email = normalizeEmail_(value);
+  if (!email) {
+    throw new Error('Set a Script Property named TEST_EMAIL to the address you want to test. Apps Script → Project Settings → Script properties.');
+  }
+  return email;
 }
 
 function generatePasswordResetLink_(email) {
