@@ -59,6 +59,21 @@ async function commitMemberUpdates(churchId, updates) {
   }
 }
 
+async function preflightMemberRemoval(churchId, uid) {
+  const [churchSnap, memberSnap] = await Promise.all([
+    getDoc(doc(db, "churches", churchId)),
+    getDoc(doc(db, "churches", churchId, "members", uid))
+  ]);
+  if (!churchSnap.exists()) throw new Error("This congregation no longer exists.");
+  if (!memberSnap.exists()) throw new Error("That person is no longer a member of this congregation.");
+  const church = churchSnap.data();
+  const member = memberSnap.data();
+  if (church.createdBy === uid || (member.roleIds || []).includes("owner")) {
+    throw new Error("The congregation creator cannot leave or be removed. Delete the congregation instead.");
+  }
+  return { church, member };
+}
+
 async function bestEffortMembershipCleanup(churchId, uid) {
   // Group membership and event RSVP records are access/participation records rather than authored content.
   // Remove them when possible so a future re-join does not silently restore old group membership or RSVPs.
@@ -135,8 +150,10 @@ async function nextChurchForUser(uid, excludedChurchId) {
 
 async function removeMembershipCore(churchId, targetUid, { selfLeave = false } = {}) {
   if (!churchId || !targetUid) throw new Error("A congregation and member are required.");
-  const nextChurchId = selfLeave ? await nextChurchForUser(targetUid, churchId) : null;
 
+  // Validate protected ownership before touching participation records.
+  await preflightMemberRemoval(churchId, targetUid);
+  const nextChurchId = selfLeave ? await nextChurchForUser(targetUid, churchId) : null;
   await bestEffortMembershipCleanup(churchId, targetUid);
 
   return runTransaction(db, async (transaction) => {
@@ -159,7 +176,7 @@ async function removeMembershipCore(churchId, targetUid, { selfLeave = false } =
     const church = churchSnap.data();
     const member = memberSnap.data();
     if (church.createdBy === targetUid || (member.roleIds || []).includes("owner")) {
-      throw new Error("The congregation creator cannot leave or be removed. Transfer ownership or delete the congregation instead.");
+      throw new Error("The congregation creator cannot leave or be removed. Delete the congregation instead.");
     }
 
     transaction.delete(memberRef);
