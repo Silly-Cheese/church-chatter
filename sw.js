@@ -1,4 +1,4 @@
-const CACHE = "church-chatter-shell-v10";
+const CACHE = "church-chatter-shell-v11";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const APP_SHELL = [
   "./mobile-nav.css",
   "./mobile-polish.css",
   "./connect.css",
+  "./connect-enhancements.css",
   "./auth-action.html",
   "./auth-action.css",
   "./manifest.webmanifest",
@@ -31,6 +32,7 @@ const APP_SHELL = [
   "./src/connect.js",
   "./src/connect-bridge.js",
   "./src/connect-mobile.js",
+  "./src/connect-enhancements.js",
   "./src/auth-action.js",
   "./src/pwa.js"
 ];
