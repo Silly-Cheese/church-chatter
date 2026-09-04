@@ -146,10 +146,12 @@ async function removeMembershipCore(churchId, targetUid, { selfLeave = false } =
     const joinRequestRef = doc(db, "churchJoinRequests", churchId, "requests", targetUid);
     const userRef = doc(db, "users", targetUid);
 
-    const reads = [transaction.get(churchRef), transaction.get(memberRef), transaction.get(membershipRef), transaction.get(joinRequestRef)];
+    // Do not read another person's private users/{uid}/memberships document. The atomic
+    // delete is validated by Firestore against the matching church member deletion.
+    const reads = [transaction.get(churchRef), transaction.get(memberRef), transaction.get(joinRequestRef)];
     if (selfLeave) reads.push(transaction.get(userRef));
     const results = await Promise.all(reads);
-    const [churchSnap, memberSnap, membershipSnap, joinRequestSnap, userSnap] = results;
+    const [churchSnap, memberSnap, joinRequestSnap, userSnap] = results;
 
     if (!churchSnap.exists()) throw new Error("This congregation no longer exists.");
     if (!memberSnap.exists()) throw new Error("That person is no longer a member of this congregation.");
@@ -161,7 +163,7 @@ async function removeMembershipCore(churchId, targetUid, { selfLeave = false } =
     }
 
     transaction.delete(memberRef);
-    if (membershipSnap.exists()) transaction.delete(membershipRef);
+    transaction.delete(membershipRef);
     if (joinRequestSnap.exists()) transaction.delete(joinRequestRef);
     transaction.update(churchRef, {
       memberCount: Math.max(0, (church.memberCount || 1) - 1),
