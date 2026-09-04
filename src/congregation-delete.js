@@ -94,6 +94,16 @@ export async function deleteCongregation(churchId, user, onProgress) {
   const progress = { stage: "Preparing deletion…", deleted: 0, total: 0 };
   onProgress?.({ ...progress });
 
+  // Church Network collection rules use the user's active congregation as their authority
+  // context. Keep the creator's persisted profile aligned with the congregation being
+  // deleted before reading network mirrors/connections. This also makes retries safe when
+  // the UI had fallen back to a valid membership while users/{uid}.activeChurchId was stale.
+  const userRef = doc(db, "users", user.uid);
+  const userBefore = await getDoc(userRef);
+  if (userBefore.exists() && userBefore.data().activeChurchId !== churchId) {
+    await updateDoc(userRef, { activeChurchId: churchId, lastSeenAt: serverTimestamp() });
+  }
+
   // Explicitly enter deletion mode before broad recursive cleanup. Firestore rules only
   // unlock creator-wide nested deletes while this flag exists and belongs to this creator.
   // If a connection is interrupted, the creator can safely retry the deletion later.
@@ -193,7 +203,6 @@ export async function deleteCongregation(churchId, user, onProgress) {
     onProgress?.({ ...progress });
   }
 
-  const userRef = doc(db, "users", user.uid);
   const userSnap = await getDoc(userRef);
   if (userSnap.exists() && userSnap.data().activeChurchId === churchId) {
     await updateDoc(userRef, { activeChurchId: null, lastSeenAt: serverTimestamp() });
