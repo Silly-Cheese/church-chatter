@@ -1,4 +1,4 @@
-const CACHE = "church-chatter-shell-v9";
+const CACHE = "church-chatter-shell-v10";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const APP_SHELL = [
   "./danger.css",
   "./mobile-nav.css",
   "./mobile-polish.css",
+  "./connect.css",
   "./auth-action.html",
   "./auth-action.css",
   "./manifest.webmanifest",
@@ -26,6 +27,10 @@ const APP_SHELL = [
   "./src/congregation-delete.js",
   "./src/congregation-danger.js",
   "./src/mobile-navigation.js",
+  "./src/connect-data.js",
+  "./src/connect.js",
+  "./src/connect-bridge.js",
+  "./src/connect-mobile.js",
   "./src/auth-action.js",
   "./src/pwa.js"
 ];
@@ -46,13 +51,14 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
 
-  // Firebase SDKs, authentication traffic, Firestore APIs, and Apps Script stay network-managed.
+  // Firebase SDKs, authentication traffic, Firestore APIs, Apps Script, and QR library stay network-managed.
   if (
     url.hostname.includes("googleapis.com") ||
     url.hostname.includes("firebaseapp.com") ||
     url.hostname.includes("gstatic.com") ||
     url.hostname.includes("script.google.com") ||
-    url.hostname.includes("script.googleusercontent.com")
+    url.hostname.includes("script.googleusercontent.com") ||
+    url.hostname.includes("cdn.jsdelivr.net")
   ) return;
 
   event.respondWith(
