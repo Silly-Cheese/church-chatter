@@ -8,6 +8,9 @@ service cloud.firestore {
     function churchPath(churchId) {
       return /databases/$(database)/documents/churches/$(churchId);
     }
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
     function isCreator(churchId) {
       return signedIn() && exists(churchPath(churchId))
         && get(churchPath(churchId)).data.createdBy == request.auth.uid;
@@ -26,6 +29,12 @@ service cloud.firestore {
     function canNetwork(churchId) {
       return hasPermission(churchId, 'manageChurch')
         || hasPermission(churchId, 'communicateChurchNetwork');
+    }
+    function hasActiveNetworkAuthority() {
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.activeChurchId is string
+        && canNetwork(get(userPath(request.auth.uid)).data.activeChurchId);
     }
 
     function validText(value, max) { return value is string && value.size() > 0 && value.size() <= max; }
@@ -640,6 +649,10 @@ service cloud.firestore {
     match /churchDirectory/{churchId} {
       allow read: if signedIn();
       allow create, update: if hasPermission(churchId,'manageChurch')
+        && request.resource.data.keys().hasOnly([
+          'churchId','name','city','region','tradition','website','description','joinMode',
+          'searchPrefixes','publishedBy','publishedAt','updatedAt'
+        ])
         && request.resource.data.churchId == churchId
         && validText(request.resource.data.name,100)
         && textAtMost(request.resource.data.city,80)
@@ -655,8 +668,12 @@ service cloud.firestore {
     }
 
     match /churchNetwork/{churchId} {
-      allow read: if signedIn();
+      allow read: if hasActiveNetworkAuthority();
       allow create, update: if hasPermission(churchId,'manageChurch')
+        && request.resource.data.keys().hasOnly([
+          'churchId','name','city','region','tradition','website','description',
+          'searchPrefixes','publishedBy','publishedAt','updatedAt'
+        ])
         && request.resource.data.churchId == churchId
         && validText(request.resource.data.name,100)
         && textAtMost(request.resource.data.city,80)
@@ -675,6 +692,9 @@ service cloud.firestore {
       allow list: if hasPermission(churchId,'manageMembers') || hasPermission(churchId,'manageChurch');
       allow create: if isSelf(uid) && exists(directoryPath(churchId))
         && get(directoryPath(churchId)).data.joinMode == 'request'
+        && request.resource.data.keys().hasOnly([
+          'churchId','churchName','uid','displayName','email','photoURL','status','requestedAt','updatedAt'
+        ])
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.churchId == churchId
         && request.resource.data.status == 'pending'
@@ -686,8 +706,17 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.churchId == churchId
         && (
-          (resource.data.status == 'denied' && request.resource.data.status == 'pending')
-          || (resource.data.status == 'approved' && request.resource.data.status == 'joined')
+          (
+            resource.data.status == 'denied'
+            && request.resource.data.status == 'pending'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'churchName','displayName','email','photoURL','status','requestedAt','updatedAt'
+            ])
+          ) || (
+            resource.data.status == 'approved'
+            && request.resource.data.status == 'joined'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','joinedAt','updatedAt'])
+          )
         );
       allow update: if (hasPermission(churchId,'manageMembers') || hasPermission(churchId,'manageChurch'))
         && resource.data.status == 'pending'
@@ -700,10 +729,16 @@ service cloud.firestore {
     match /churchConnections/{connectionId} {
       allow get, list: if connectionReadable(resource.data);
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'connectionId','churchIds','churchAId','churchBId','churchAName','churchBName',
+          'requestedByChurchId','requestedByUid','status','createdAt','updatedAt'
+        ])
         && request.resource.data.connectionId == connectionId
         && request.resource.data.churchIds is list && request.resource.data.churchIds.size() == 2
         && request.resource.data.churchAId == request.resource.data.churchIds[0]
         && request.resource.data.churchBId == request.resource.data.churchIds[1]
+        && validText(request.resource.data.churchAName,100)
+        && validText(request.resource.data.churchBName,100)
         && request.resource.data.requestedByChurchId in request.resource.data.churchIds
         && request.resource.data.requestedByUid == request.auth.uid
         && request.resource.data.status == 'pending'
@@ -726,6 +761,9 @@ service cloud.firestore {
       match /messages/{messageId} {
         allow read: if connectionUsable(get(/databases/$(database)/documents/churchConnections/$(connectionId)).data);
         allow create: if connectionUsable(get(/databases/$(database)/documents/churchConnections/$(connectionId)).data)
+          && request.resource.data.keys().hasOnly([
+            'body','senderChurchId','senderChurchName','senderUid','senderName','createdAt'
+          ])
           && validText(request.resource.data.body,3000)
           && request.resource.data.senderUid == request.auth.uid
           && request.resource.data.senderChurchId in get(/databases/$(database)/documents/churchConnections/$(connectionId)).data.churchIds
