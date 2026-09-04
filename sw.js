@@ -1,4 +1,4 @@
-const CACHE = "church-chatter-shell-v13";
+const CACHE = "church-chatter-shell-v14";
 const APP_SHELL = [
   "./",
   "./index.html",
