@@ -1,5 +1,6 @@
 rules_version = '2';
 
+// Church Chatter Firestore rules — network + governance hardening
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -327,7 +328,10 @@ service cloud.firestore {
           (request.resource.data.lastMemberRemovedUid == request.auth.uid && !isCreator(churchId))
           || (request.resource.data.lastMemberRemovedUid != request.auth.uid && hasPermission(churchId,'manageMembers'))
         );
-      allow delete: if isCreator(churchId);
+
+      // The church document itself may only disappear after the creator has explicitly
+      // entered deletion mode. This prevents orphaning subcollections with a direct delete.
+      allow delete: if creatorDeletionMode(churchId);
 
       match /members/{uid} {
         allow get: if isMember(churchId) || isSelf(uid);
@@ -758,6 +762,7 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Recursive creator cleanup is only available while explicit deletion mode is active.
       match /{document=**} {
         allow read, delete: if creatorDeletionMode(churchId);
       }
@@ -804,7 +809,11 @@ service cloud.firestore {
     }
 
     match /churchNetwork/{churchId} {
-      allow read: if hasActiveNetworkAuthority() || creatorDeletionMode(churchId);
+      // Direct reads of a specific network profile may be authorized by the caller's live
+      // role in that congregation. Collection search still requires an active network-authorized
+      // congregation so ordinary members cannot enumerate the inter-church directory.
+      allow get: if canNetwork(churchId) || hasActiveNetworkAuthority() || creatorDeletionMode(churchId);
+      allow list: if hasActiveNetworkAuthority();
       allow create, update: if hasPermission(churchId,'manageChurch')
         && request.resource.data.keys().hasOnly([
           'churchId','name','city','region','tradition','website','description',
