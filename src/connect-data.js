@@ -279,9 +279,18 @@ export async function requestChurchConnection(fromChurch, toChurch, userId) {
 }
 
 export async function getChurchConnections(churchId) {
-  const snap = await getDocs(query(collection(db, "churchConnections"), where("churchIds", "array-contains", churchId), limit(60)));
-  return snap.docs
-    .map((item) => ({ id: item.id, ...item.data() }))
+  // Two equality queries are intentional. Firestore Security Rules can prove that the
+  // authorized church is a participant in each result. The old array-contains query made
+  // the same fact ambiguous to the rules engine and caused legitimate reads to fail.
+  const ref = collection(db, "churchConnections");
+  const [asA, asB] = await Promise.all([
+    getDocs(query(ref, where("churchAId", "==", churchId), limit(60))),
+    getDocs(query(ref, where("churchBId", "==", churchId), limit(60)))
+  ]);
+
+  const byId = new Map();
+  [...asA.docs, ...asB.docs].forEach((item) => byId.set(item.id, { id: item.id, ...item.data() }));
+  return Array.from(byId.values())
     .sort((a, b) => (b.updatedAt?.seconds || b.createdAt?.seconds || 0) - (a.updatedAt?.seconds || a.createdAt?.seconds || 0));
 }
 
