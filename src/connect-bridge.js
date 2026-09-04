@@ -1,5 +1,5 @@
 import { auth } from "./firebase.js";
-import { getChurchContext, getMemberships, getUserProfile, observeAuth, PERMISSIONS } from "./services.js";
+import { getChurchContext, getMemberships, getUserProfile, observeAuth, PERMISSIONS, setActiveChurch } from "./services.js";
 import {
   connectRouteShell,
   decorateOnboardingDiscovery,
@@ -54,10 +54,26 @@ async function loadState() {
     activeChurchId = memberships.some((item) => item.churchId === profile?.activeChurchId)
       ? profile.activeChurchId
       : memberships[0].churchId;
+
+    // Firestore's Church Network rules intentionally use the user's active congregation
+    // as the authority context for collection queries. Keep the persisted profile aligned
+    // with the congregation the UI actually opened so a stale/null profile cannot cause a
+    // false "missing or insufficient permissions" error.
+    if (profile?.activeChurchId !== activeChurchId) {
+      await setActiveChurch(user.uid, activeChurchId);
+    }
+
     context = await getChurchContext(activeChurchId, user.uid);
   }
 
-  return { user, profile, memberships, activeChurchId, context, route: hashRoute() };
+  return {
+    user,
+    profile: profile ? { ...profile, activeChurchId } : profile,
+    memberships,
+    activeChurchId,
+    context,
+    route: hashRoute()
+  };
 }
 
 function hasPermission(permission) {
@@ -110,7 +126,6 @@ async function syncPublicMirrorsIfNeeded() {
   try {
     await syncPublicChurchMirrors(connectState.activeChurchId, connectState.user.uid);
   } catch (error) {
-    // Public mirrors are convenience indexes. A failed sync must never block the private church app.
     console.warn("Church Chatter directory sync deferred", error);
     lastMirrorKey = "";
   }
