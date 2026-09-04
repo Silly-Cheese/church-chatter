@@ -5,8 +5,10 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
   serverTimestamp,
-  updateDoc
+  updateDoc,
+  where
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const TOP_LEVEL_COLLECTIONS = [
@@ -66,8 +68,6 @@ async function collectChildren(parentDocs, childNames) {
 }
 
 async function disconnectMember(churchId, uid, memberRef, onProgress, progress) {
-  // Remove the user's cross-links before their church member record. If deletion is interrupted,
-  // every member already removed is fully disconnected and remaining members can be discovered on retry.
   await deleteDoc(doc(db, "users", uid, "memberships", churchId));
   progress.deleted += 1;
   onProgress?.({ ...progress });
@@ -93,7 +93,6 @@ export async function deleteCongregation(churchId, user, onProgress) {
 
   const progress = { stage: "Preparing deletion…", deleted: 0, total: 0 };
   onProgress?.({ ...progress });
-
   progress.stage = "Finding congregation data…";
   onProgress?.({ ...progress });
 
@@ -110,16 +109,34 @@ export async function deleteCongregation(churchId, user, onProgress) {
   }
 
   const topRefs = [];
-  for (const snapshot of topSnapshots.values()) {
-    snapshot.docs.forEach((item) => topRefs.push(item.ref));
-  }
+  for (const snapshot of topSnapshots.values()) snapshot.docs.forEach((item) => topRefs.push(item.ref));
 
   const inviteSnapshot = topSnapshots.get("invites");
   const globalInviteRefs = (inviteSnapshot?.docs || []).map((item) => doc(db, "inviteCodes", item.id));
 
+  // Church Discovery / Network data lives outside the private congregation tree, so it must
+  // be explicitly included in deletion as well.
+  const externalRefs = [];
+  const directorySnap = await getDoc(doc(db, "churchDirectory", churchId));
+  if (directorySnap.exists()) externalRefs.push(directorySnap.ref);
+  const networkSnap = await getDoc(doc(db, "churchNetwork", churchId));
+  if (networkSnap.exists()) externalRefs.push(networkSnap.ref);
+
+  const joinRequests = await getDocs(collection(db, "churchJoinRequests", churchId, "requests"));
+  joinRequests.docs.forEach((item) => externalRefs.push(item.ref));
+
+  const connectionSnap = await getDocs(query(collection(db, "churchConnections"), where("churchIds", "array-contains", churchId)));
+  const connectionMessageRefs = [];
+  for (const connectionDoc of connectionSnap.docs) {
+    const messages = await getDocs(collection(connectionDoc.ref, "messages"));
+    messages.docs.forEach((message) => connectionMessageRefs.push(message.ref));
+  }
+  const connectionRefs = connectionSnap.docs.map((item) => item.ref);
+
   const creatorMember = membersSnapshot.docs.find((item) => item.id === user.uid) || null;
   const otherMembers = membersSnapshot.docs.filter((item) => item.id !== user.uid);
-  progress.total = nestedRefs.length + topRefs.length + globalInviteRefs.length + (otherMembers.length * 3) + 4;
+  progress.total = nestedRefs.length + topRefs.length + globalInviteRefs.length + externalRefs.length
+    + connectionMessageRefs.length + connectionRefs.length + (otherMembers.length * 3) + 4;
 
   progress.stage = "Disconnecting congregation members…";
   onProgress?.({ ...progress });
@@ -130,6 +147,15 @@ export async function deleteCongregation(churchId, user, onProgress) {
   progress.stage = "Removing conversations and nested activity…";
   onProgress?.({ ...progress });
   await deleteRefs(nestedRefs, onProgress, progress);
+
+  progress.stage = "Removing church-to-church connections…";
+  onProgress?.({ ...progress });
+  await deleteRefs(connectionMessageRefs, onProgress, progress);
+  await deleteRefs(connectionRefs, onProgress, progress);
+
+  progress.stage = "Removing discovery and network records…";
+  onProgress?.({ ...progress });
+  await deleteRefs(externalRefs, onProgress, progress);
 
   progress.stage = "Removing congregation content…";
   onProgress?.({ ...progress });
@@ -154,7 +180,6 @@ export async function deleteCongregation(churchId, user, onProgress) {
     onProgress?.({ ...progress });
   }
 
-  // Reset the creator's active congregation before the top-level church document disappears.
   const userRef = doc(db, "users", user.uid);
   const userSnap = await getDoc(userRef);
   if (userSnap.exists() && userSnap.data().activeChurchId === churchId) {
