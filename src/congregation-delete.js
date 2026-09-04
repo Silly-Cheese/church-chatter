@@ -93,6 +93,19 @@ export async function deleteCongregation(churchId, user, onProgress) {
 
   const progress = { stage: "Preparing deletion…", deleted: 0, total: 0 };
   onProgress?.({ ...progress });
+
+  // Explicitly enter deletion mode before broad recursive cleanup. Firestore rules only
+  // unlock creator-wide nested deletes while this flag exists and belongs to this creator.
+  // If a connection is interrupted, the creator can safely retry the deletion later.
+  if (church.deletionState !== "deleting" || church.deletionStartedBy !== user.uid) {
+    await updateDoc(churchRef, {
+      deletionState: "deleting",
+      deletionStartedBy: user.uid,
+      deletionStartedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  }
+
   progress.stage = "Finding congregation data…";
   onProgress?.({ ...progress });
 
