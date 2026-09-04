@@ -240,7 +240,7 @@ export async function joinDiscoveredChurch(churchId, user) {
     });
     transaction.update(churchRef, { memberCount: (church.memberCount || 0) + 1, updatedAt: serverTimestamp() });
     transaction.set(userRef, { activeChurchId: churchId, lastSeenAt: serverTimestamp() }, { merge: true });
-    if (requestSnap.exists()) transaction.update(requestRef, { status: "joined", joinedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    if (approved) transaction.update(requestRef, { status: "joined", joinedAt: serverTimestamp(), updatedAt: serverTimestamp() });
     return churchId;
   });
 }
@@ -255,7 +255,11 @@ export async function requestChurchConnection(fromChurch, toChurch, userId) {
   const id = connectionId(fromChurch.id, toChurch.churchId);
   const ref = doc(db, "churchConnections", id);
   const existing = await getDoc(ref);
-  if (existing.exists() && existing.data().status === "accepted") throw new Error("These congregations are already connected.");
+  if (existing.exists()) {
+    if (existing.data().status === "accepted") throw new Error("These congregations are already connected.");
+    if (existing.data().status === "pending") throw new Error("A connection request is already waiting for a response.");
+    await deleteDoc(ref);
+  }
 
   const churchIds = [fromChurch.id, toChurch.churchId].sort();
   await setDoc(ref, {
@@ -270,7 +274,7 @@ export async function requestChurchConnection(fromChurch, toChurch, userId) {
     status: "pending",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
-  }, { merge: true });
+  });
   return id;
 }
 
