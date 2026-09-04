@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Church Chatter Firestore rules — query-safe governance + network hardening
+// Church Chatter Firestore rules — reliable network, membership governance, and retry-safe deletion
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -42,6 +42,10 @@ service cloud.firestore {
         && exists(churchPath(churchId))
         && get(churchPath(churchId)).data.createdBy == request.auth.uid;
     }
+    function isProtectedCreator(churchId, uid) {
+      return exists(churchPath(churchId))
+        && get(churchPath(churchId)).data.createdBy == uid;
+    }
     function creatorDeletionMode(churchId) {
       return isCreator(churchId)
         && get(churchPath(churchId)).data.deletionState == 'deleting'
@@ -61,6 +65,12 @@ service cloud.firestore {
       return isCreator(churchId)
         || hasPermission(churchId, 'manageChurch')
         || hasPermission(churchId, 'communicateChurchNetwork');
+    }
+    function hasActiveNetworkAuthority() {
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.activeChurchId is string
+        && canNetwork(get(userPath(request.auth.uid)).data.activeChurchId);
     }
 
     function validText(value, max) {
@@ -217,7 +227,12 @@ service cloud.firestore {
         allow update: if isSelf(uid);
         allow delete: if creatorDeletionMode(churchId)
           || (isSelf(uid) && !isCreator(churchId) && !existsAfter(memberPath(churchId, uid)))
-          || (hasPermission(churchId, 'manageMembers') && uid != request.auth.uid && !existsAfter(memberPath(churchId, uid)));
+          || (
+            hasPermission(churchId, 'manageMembers')
+            && uid != request.auth.uid
+            && !isProtectedCreator(churchId, uid)
+            && !existsAfter(memberPath(churchId, uid))
+          );
       }
 
       match /activity/{churchId} {
@@ -279,10 +294,11 @@ service cloud.firestore {
         && resource.data.memberCount > 0
         && request.resource.data.memberCount == resource.data.memberCount - 1
         && request.resource.data.lastMemberRemovedUid is string
+        && !isProtectedCreator(churchId, request.resource.data.lastMemberRemovedUid)
         && !existsAfter(memberPath(churchId, request.resource.data.lastMemberRemovedUid))
         && (
-          (request.resource.data.lastMemberRemovedUid == request.auth.uid && !isCreator(churchId))
-          || (request.resource.data.lastMemberRemovedUid != request.auth.uid && hasPermission(churchId, 'manageMembers'))
+          request.resource.data.lastMemberRemovedUid == request.auth.uid
+          || hasPermission(churchId, 'manageMembers')
         );
 
       allow delete: if creatorDeletionMode(churchId);
@@ -338,7 +354,12 @@ service cloud.firestore {
 
         allow delete: if creatorDeletionMode(churchId)
           || (isSelf(uid) && !isCreator(churchId))
-          || (hasPermission(churchId, 'manageMembers') && uid != request.auth.uid && !isCreator(churchId));
+          || (
+            hasPermission(churchId, 'manageMembers')
+            && uid != request.auth.uid
+            && !isProtectedCreator(churchId, uid)
+            && !('owner' in resource.data.roleIds)
+          );
       }
 
       match /roles/{roleId} {
@@ -373,7 +394,8 @@ service cloud.firestore {
           && request.resource.data.system == false
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','description','permissions','updatedAt'])
           && validText(request.resource.data.name, 60)
-          && canGrantPermissions(churchId, request.resource.data.permissions);
+          && canGrantPermissions(churchId, request.resource.data.permissions)
+          && (!containsAdministrativePermissions(resource.data.permissions) || hasPermission(churchId, 'manageChurch'));
 
         allow delete: if creatorDeletionMode(churchId)
           || (
@@ -403,7 +425,8 @@ service cloud.firestore {
           && (resource.data.expiresAt == null || resource.data.expiresAt > request.time)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uses','lastUsedAt'])
           && request.resource.data.uses == resource.data.uses + 1
-          && existsAfter(memberPath(churchId, request.auth.uid));
+          && existsAfter(memberPath(churchId, request.auth.uid))
+          && getAfter(memberPath(churchId, request.auth.uid)).data.status == 'active';
         allow delete: if hasPermission(churchId, 'manageInvites') || creatorDeletionMode(churchId);
       }
 
@@ -417,12 +440,25 @@ service cloud.firestore {
         allow create: if hasPermission(churchId, 'postChatter')
           && request.resource.data.authorUid == request.auth.uid
           && validText(request.resource.data.body, 4000);
-        allow update: if (resource.data.authorUid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body','editedAt']))
-          || (hasPermission(churchId, 'moderateContent')
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned','moderatedAt']))
-          || (isMember(churchId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactionCount']));
+        allow update: if (
+          resource.data.authorUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body','editedAt'])
+        ) || (
+          hasPermission(churchId, 'moderateContent')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned','moderatedAt'])
+        ) || (
+          isMember(churchId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactionCount'])
+          && (
+            (request.resource.data.reactionCount == resource.data.reactionCount + 1
+              && !exists(chatterReactionPath(churchId, postId, request.auth.uid))
+              && existsAfter(chatterReactionPath(churchId, postId, request.auth.uid)))
+            || (request.resource.data.reactionCount == resource.data.reactionCount - 1
+              && request.resource.data.reactionCount >= 0
+              && exists(chatterReactionPath(churchId, postId, request.auth.uid))
+              && !existsAfter(chatterReactionPath(churchId, postId, request.auth.uid)))
+          )
+        );
         allow delete: if creatorDeletionMode(churchId)
           || resource.data.authorUid == request.auth.uid
           || hasPermission(churchId, 'moderateContent');
@@ -441,7 +477,12 @@ service cloud.firestore {
         match /reactions/{uid} {
           allow get: if isSelf(uid) && hasPermission(churchId, 'readCommunity');
           allow list: if creatorDeletionMode(churchId);
-          allow create, delete: if isSelf(uid) && hasPermission(churchId, 'readCommunity');
+          allow create: if isSelf(uid)
+            && hasPermission(churchId, 'readCommunity')
+            && getAfter(chatterPath(churchId, postId)).data.reactionCount == get(chatterPath(churchId, postId)).data.reactionCount + 1;
+          allow delete: if creatorDeletionMode(churchId)
+            || (isSelf(uid)
+              && getAfter(chatterPath(churchId, postId)).data.reactionCount == get(chatterPath(churchId, postId)).data.reactionCount - 1);
           allow update: if false;
         }
       }
@@ -451,9 +492,22 @@ service cloud.firestore {
         allow create: if hasPermission(churchId, 'createPrayer')
           && validText(request.resource.data.body, 2500)
           && request.resource.data.status == 'open';
-        allow update: if hasPermission(churchId, 'moderateContent')
+        allow update: if (
+          hasPermission(churchId, 'moderateContent')
           || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid)
-          || (isMember(churchId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['prayedCount']));
+        ) || (
+          isMember(churchId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['prayedCount'])
+          && (
+            (request.resource.data.prayedCount == resource.data.prayedCount + 1
+              && !exists(prayedPath(churchId, 'prayers', prayerId, request.auth.uid))
+              && existsAfter(prayedPath(churchId, 'prayers', prayerId, request.auth.uid)))
+            || (request.resource.data.prayedCount == resource.data.prayedCount - 1
+              && request.resource.data.prayedCount >= 0
+              && exists(prayedPath(churchId, 'prayers', prayerId, request.auth.uid))
+              && !existsAfter(prayedPath(churchId, 'prayers', prayerId, request.auth.uid)))
+          )
+        );
         allow delete: if creatorDeletionMode(churchId)
           || hasPermission(churchId, 'moderateContent')
           || (!resource.data.anonymous && resource.data.authorUid == request.auth.uid);
@@ -461,7 +515,12 @@ service cloud.firestore {
         match /prayedBy/{uid} {
           allow get: if isSelf(uid) && hasPermission(churchId, 'readCommunity');
           allow list: if creatorDeletionMode(churchId);
-          allow create, delete: if isSelf(uid) && hasPermission(churchId, 'readCommunity');
+          allow create: if isSelf(uid)
+            && hasPermission(churchId, 'readCommunity')
+            && getAfter(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount == get(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount + 1;
+          allow delete: if creatorDeletionMode(churchId)
+            || (isSelf(uid)
+              && getAfter(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount == get(prayerPath(churchId, 'prayers', prayerId)).data.prayedCount - 1);
           allow update: if false;
         }
       }
@@ -479,7 +538,8 @@ service cloud.firestore {
         match /prayedBy/{uid} {
           allow get: if isSelf(uid) && hasPermission(churchId, 'viewLeadershipPrayer');
           allow list: if creatorDeletionMode(churchId);
-          allow create, delete: if isSelf(uid) && hasPermission(churchId, 'viewLeadershipPrayer');
+          allow create, delete: if creatorDeletionMode(churchId)
+            || (isSelf(uid) && hasPermission(churchId, 'viewLeadershipPrayer'));
           allow update: if false;
         }
       }
@@ -555,16 +615,44 @@ service cloud.firestore {
 
       match /serveOpportunities/{opportunityId} {
         allow read: if hasPermission(churchId, 'readCommunity') || hasPermission(churchId, 'manageGroups') || creatorDeletionMode(churchId);
-        allow create, update, delete: if hasPermission(churchId, 'manageGroups');
+        allow create: if hasPermission(churchId, 'manageGroups');
+        allow update: if hasPermission(churchId, 'manageGroups');
+        allow update: if isMember(churchId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['signupCount'])
+          && (
+            (request.resource.data.signupCount == serveCount(resource.data) + 1
+              && !exists(serveSignupPath(churchId, opportunityId, request.auth.uid))
+              && existsAfter(serveSignupPath(churchId, opportunityId, request.auth.uid)))
+            || (request.resource.data.signupCount == serveCount(resource.data) - 1
+              && request.resource.data.signupCount >= 0
+              && exists(serveSignupPath(churchId, opportunityId, request.auth.uid))
+              && !existsAfter(serveSignupPath(churchId, opportunityId, request.auth.uid)))
+          );
+        allow update: if signedIn()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'signupCount','lastSignupRemovedUid','lastSignupRemovedAt'
+          ])
+          && request.resource.data.lastSignupRemovedUid is string
+          && request.resource.data.signupCount == serveCount(resource.data) - 1
+          && request.resource.data.signupCount >= 0
+          && !existsAfter(serveSignupPath(churchId, opportunityId, request.resource.data.lastSignupRemovedUid))
+          && (
+            request.resource.data.lastSignupRemovedUid == request.auth.uid
+            || hasPermission(churchId, 'manageMembers')
+          );
+        allow delete: if hasPermission(churchId, 'manageGroups') || creatorDeletionMode(churchId);
 
         match /signups/{uid} {
           allow get: if isSelf(uid) || hasPermission(churchId, 'manageGroups') || hasPermission(churchId, 'manageMembers');
           allow list: if hasPermission(churchId, 'manageGroups') || creatorDeletionMode(churchId);
-          allow create: if isSelf(uid) && hasPermission(churchId, 'readCommunity');
+          allow create: if isSelf(uid)
+            && hasPermission(churchId, 'readCommunity')
+            && getAfter(servePath(churchId, opportunityId)).data.signupCount == serveCount(get(servePath(churchId, opportunityId)).data) + 1;
           allow delete: if creatorDeletionMode(churchId)
-            || isSelf(uid)
-            || hasPermission(churchId, 'manageGroups')
-            || hasPermission(churchId, 'manageMembers');
+            || (
+              (isSelf(uid) || hasPermission(churchId, 'manageMembers') || hasPermission(churchId, 'manageGroups'))
+              && getAfter(servePath(churchId, opportunityId)).data.signupCount == serveCount(get(servePath(churchId, opportunityId)).data) - 1
+            );
           allow update: if false;
         }
       }
@@ -580,9 +668,6 @@ service cloud.firestore {
         allow delete: if creatorDeletionMode(churchId);
       }
 
-      // Any future congregation-scoped subcollection is removable only during an explicit
-      // creator-owned deletion. This makes deletion forward-compatible without granting
-      // ordinary broad write access.
       match /{document=**} {
         allow read, delete: if creatorDeletionMode(churchId);
       }
@@ -597,21 +682,24 @@ service cloud.firestore {
         && request.resource.data.active == true
         && request.resource.data.uses == 0
         && request.resource.data.maxUses is int
+        && request.resource.data.maxUses >= 1
+        && request.resource.data.maxUses <= 500
         && hasPermission(request.resource.data.churchId, 'manageInvites');
       allow update: if hasPermission(resource.data.churchId, 'manageInvites')
-        || (
-          signedIn()
-          && resource.data.active == true
-          && resource.data.uses < resource.data.maxUses
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uses','lastUsedAt'])
-          && request.resource.data.uses == resource.data.uses + 1
-        );
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active','updatedAt']);
+      allow update: if signedIn()
+        && resource.data.active == true
+        && resource.data.uses < resource.data.maxUses
+        && (resource.data.expiresAt == null || resource.data.expiresAt > request.time)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uses','lastUsedAt'])
+        && request.resource.data.uses == resource.data.uses + 1
+        && existsAfter(memberPath(resource.data.churchId, request.auth.uid))
+        && getAfter(memberPath(resource.data.churchId, request.auth.uid)).data.status == 'active';
       allow delete: if hasPermission(resource.data.churchId, 'manageInvites')
         || creatorDeletionMode(resource.data.churchId);
     }
 
     match /churchDirectory/{churchId} {
-      // Discovery is opt-in because only enabled congregations have a document here.
       allow read: if signedIn();
       allow create, update: if hasPermission(churchId, 'manageChurch')
         && request.resource.data.churchId == churchId
@@ -621,9 +709,9 @@ service cloud.firestore {
     }
 
     match /churchNetwork/{churchId} {
-      // This collection contains only the opt-in public church profile mirror. Reading it is
-      // safe for authenticated Church Chatter users; acting on behalf of a church is still
-      // separately permission-gated below.
+      // Only opt-in congregations have a document in this collection. It contains public-facing
+      // church profile fields, so authenticated users may discover it. Sending/connecting is
+      // still restricted to authorized church representatives.
       allow read: if signedIn();
       allow create, update: if hasPermission(churchId, 'manageChurch')
         && request.resource.data.churchId == churchId
@@ -662,13 +750,15 @@ service cloud.firestore {
         );
       allow delete: if creatorDeletionMode(churchId)
         || (isSelf(uid) && !isCreator(churchId))
-        || (hasPermission(churchId, 'manageMembers') && uid != request.auth.uid);
+        || (hasPermission(churchId, 'manageMembers') && uid != request.auth.uid && !isProtectedCreator(churchId, uid));
     }
 
     match /churchConnections/{connectionId} {
-      // Clients query churchAId and churchBId separately. Those equality queries are directly
-      // provable by Firestore Security Rules, unlike the old array-contains participant query.
-      allow get, list: if connectionReadable(resource.data);
+      // Direct reads/deletes remain participant-authorized. Collection queries are available
+      // only to a Network-authorized representative of their currently active congregation.
+      // The client then filters by churchAId/churchBId; deletion also pins activeChurchId first.
+      allow get: if connectionReadable(resource.data);
+      allow list: if hasActiveNetworkAuthority();
 
       allow create: if signedIn()
         && request.resource.data.connectionId == connectionId
@@ -690,6 +780,9 @@ service cloud.firestore {
           && request.resource.data.respondedByChurchId != resource.data.requestedByChurchId
           && request.resource.data.respondedByUid == request.auth.uid
           && canNetwork(request.resource.data.respondedByChurchId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','respondedByChurchId','respondedByUid','respondedAt','updatedAt'
+          ])
         ) || (
           connectionUsable(resource.data)
           && request.resource.data.status == resource.data.status
