@@ -1,4 +1,4 @@
-import { db } from "./firebase.js";
+import { auth, db } from "./firebase.js";
 import {
   collection,
   doc,
@@ -35,6 +35,14 @@ function rolePermissionUnion(roleIds, roles) {
   return unique((roleIds || []).flatMap((roleId) => roleMap.get(roleId)?.permissions || []));
 }
 
+function queueMemberUpdate(batch, churchId, update) {
+  batch.update(doc(db, "churches", churchId, "members", update.uid), {
+    roleIds: update.roleIds,
+    effectivePermissions: update.effectivePermissions,
+    rolesUpdatedAt: serverTimestamp()
+  });
+}
+
 async function getChurchRoles(churchId) {
   const snap = await getDocs(collection(db, "churches", churchId, "roles"));
   return snap.docs.map((item) => ({ id: item.id, ...item.data() }));
@@ -48,13 +56,7 @@ async function getChurchMembers(churchId) {
 async function commitMemberUpdates(churchId, updates) {
   for (let index = 0; index < updates.length; index += 400) {
     const batch = writeBatch(db);
-    updates.slice(index, index + 400).forEach(({ uid, roleIds, effectivePermissions }) => {
-      batch.update(doc(db, "churches", churchId, "members", uid), {
-        roleIds,
-        effectivePermissions,
-        rolesUpdatedAt: serverTimestamp()
-      });
-    });
+    updates.slice(index, index + 400).forEach((update) => queueMemberUpdate(batch, churchId, update));
     await batch.commit();
   }
 }
@@ -75,8 +77,8 @@ async function preflightMemberRemoval(churchId, uid) {
 }
 
 async function bestEffortMembershipCleanup(churchId, uid) {
-  // Group membership and event RSVP records are access/participation records rather than authored content.
-  // Remove them when possible so a future re-join does not silently restore old group membership or RSVPs.
+  // Participation records should not silently reactivate if this person later rejoins.
+  // Authored content is intentionally preserved as historical church content.
   try {
     const groups = await getDocs(collection(db, "churches", churchId, "groups"));
     const groupDeletes = [];
@@ -111,7 +113,7 @@ async function bestEffortMembershipCleanup(churchId, uid) {
     console.warn("Church Chatter could not clean every RSVP before removal.", error);
   }
 
-  // Keep Serve counts accurate while withdrawing this member from open/closed opportunities.
+  // Serve uses a public count, so withdrawal and count decrement happen together.
   try {
     const opportunities = await getDocs(collection(db, "churches", churchId, "serveOpportunities"));
     for (const opportunity of opportunities.docs) {
@@ -151,7 +153,7 @@ async function nextChurchForUser(uid, excludedChurchId) {
 async function removeMembershipCore(churchId, targetUid, { selfLeave = false } = {}) {
   if (!churchId || !targetUid) throw new Error("A congregation and member are required.");
 
-  // Validate protected ownership before touching participation records.
+  // Never touch participation records before confirming this is not the protected creator.
   await preflightMemberRemoval(churchId, targetUid);
   const nextChurchId = selfLeave ? await nextChurchForUser(targetUid, churchId) : null;
   await bestEffortMembershipCleanup(churchId, targetUid);
@@ -163,8 +165,8 @@ async function removeMembershipCore(churchId, targetUid, { selfLeave = false } =
     const joinRequestRef = doc(db, "churchJoinRequests", churchId, "requests", targetUid);
     const userRef = doc(db, "users", targetUid);
 
-    // Do not read another person's private users/{uid}/memberships document. The atomic
-    // delete is validated by Firestore against the matching church member deletion.
+    // A leader never reads another person's private users/{uid}/memberships mirror.
+    // Firestore validates the coordinated deletion through existsAfter().
     const reads = [transaction.get(churchRef), transaction.get(memberRef), transaction.get(joinRequestRef)];
     if (selfLeave) reads.push(transaction.get(userRef));
     const results = await Promise.all(reads);
@@ -235,29 +237,31 @@ export async function updateRoleAndPropagate(churchId, roleId, patch) {
     effectivePermissions: rolePermissionUnion(member.roleIds || ["member"], nextRoles)
   }));
 
+  const rolePatch = {
+    name: nextRole.name,
+    description: nextRole.description,
+    ...(roleId === "member" ? {} : { permissions: nextRole.permissions }),
+    updatedAt: serverTimestamp()
+  };
+
   if (memberUpdates.length <= 400) {
     const batch = writeBatch(db);
-    batch.update(roleRef, {
-      name: nextRole.name,
-      description: nextRole.description,
-      ...(roleId === "member" ? {} : { permissions: nextRole.permissions }),
-      updatedAt: serverTimestamp()
-    });
-    memberUpdates.forEach((update) => batch.update(doc(db, "churches", churchId, "members", update.uid), {
-      effectivePermissions: update.effectivePermissions,
-      rolesUpdatedAt: serverTimestamp()
-    }));
+    batch.update(roleRef, rolePatch);
+    memberUpdates.forEach((update) => queueMemberUpdate(batch, churchId, update));
     await batch.commit();
   } else {
-    const batch = writeBatch(db);
-    batch.update(roleRef, {
-      name: nextRole.name,
-      description: nextRole.description,
-      ...(roleId === "member" ? {} : { permissions: nextRole.permissions }),
-      updatedAt: serverTimestamp()
-    });
-    await batch.commit();
-    await commitMemberUpdates(churchId, memberUpdates);
+    // Keep the acting leader's current live role intact until the final batch. Otherwise,
+    // a role that grants manageRoles could revoke the person performing this operation
+    // halfway through propagating a large congregation.
+    const actorUid = auth.currentUser?.uid || "";
+    const actorUpdate = memberUpdates.find((update) => update.uid === actorUid) || null;
+    const others = memberUpdates.filter((update) => update.uid !== actorUid);
+    await commitMemberUpdates(churchId, others);
+
+    const finalBatch = writeBatch(db);
+    finalBatch.update(roleRef, rolePatch);
+    if (actorUpdate) queueMemberUpdate(finalBatch, churchId, actorUpdate);
+    await finalBatch.commit();
   }
 
   return { affectedMembers: memberUpdates.length };
@@ -288,19 +292,21 @@ export async function deleteRoleAndReassign(churchId, roleId) {
 
   if (memberUpdates.length <= 400) {
     const batch = writeBatch(db);
-    memberUpdates.forEach((update) => batch.update(doc(db, "churches", churchId, "members", update.uid), {
-      roleIds: update.roleIds,
-      effectivePermissions: update.effectivePermissions,
-      rolesUpdatedAt: serverTimestamp()
-    }));
+    memberUpdates.forEach((update) => queueMemberUpdate(batch, churchId, update));
     batch.delete(roleRef);
     await batch.commit();
   } else {
-    // Deleting the live role first revokes its server-side authority immediately.
-    const batch = writeBatch(db);
-    batch.delete(roleRef);
-    await batch.commit();
-    await commitMemberUpdates(churchId, memberUpdates);
+    // For large congregations, reassign everyone else first while the role still exists.
+    // The actor's own reassignment and role deletion happen together in the final batch.
+    const actorUid = auth.currentUser?.uid || "";
+    const actorUpdate = memberUpdates.find((update) => update.uid === actorUid) || null;
+    const others = memberUpdates.filter((update) => update.uid !== actorUid);
+    await commitMemberUpdates(churchId, others);
+
+    const finalBatch = writeBatch(db);
+    if (actorUpdate) queueMemberUpdate(finalBatch, churchId, actorUpdate);
+    finalBatch.delete(roleRef);
+    await finalBatch.commit();
   }
 
   return { affectedMembers: memberUpdates.length };
