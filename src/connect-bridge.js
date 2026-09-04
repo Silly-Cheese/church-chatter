@@ -7,11 +7,13 @@ import {
   mountConnectRoute,
   showQrJoinConfirmation
 } from "./connect.js";
+import { syncPublicChurchMirrors } from "./connect-sync.js";
 
 let scheduled = false;
 let mountingKey = "";
 let connectState = null;
 let qrHandled = false;
+let lastMirrorKey = "";
 
 function hashRoute() {
   return window.location.hash.replace(/^#\/?/, "").split("?")[0] || "home";
@@ -98,6 +100,22 @@ function injectNavigation() {
   });
 }
 
+async function syncPublicMirrorsIfNeeded() {
+  if (!connectState?.activeChurchId || !hasPermission(PERMISSIONS.MANAGE_CHURCH)) return;
+  const stamp = connectState.context?.church?.updatedAt;
+  const version = stamp?.seconds ? `${stamp.seconds}:${stamp.nanoseconds || 0}` : "nostamp";
+  const key = `${connectState.activeChurchId}:${version}`;
+  if (lastMirrorKey === key) return;
+  lastMirrorKey = key;
+  try {
+    await syncPublicChurchMirrors(connectState.activeChurchId, connectState.user.uid);
+  } catch (error) {
+    // Public mirrors are convenience indexes. A failed sync must never block the private church app.
+    console.warn("Church Chatter directory sync deferred", error);
+    lastMirrorKey = "";
+  }
+}
+
 function clearJoinParam() {
   const url = new URL(window.location.href);
   if (!url.searchParams.has("join")) return;
@@ -132,6 +150,7 @@ async function mount() {
 
   injectNavigation();
   decorateOnboardingDiscovery(options());
+  await syncPublicMirrorsIfNeeded();
   await processQrJoin();
 
   const route = hashRoute();
@@ -177,6 +196,7 @@ window.addEventListener("hashchange", () => {
 window.addEventListener("church-chatter-phase3-refresh", () => {
   mountingKey = "";
   connectState = null;
+  lastMirrorKey = "";
   schedule();
 });
 
@@ -187,6 +207,7 @@ observeAuth(() => {
   connectState = null;
   qrHandled = false;
   mountingKey = "";
+  lastMirrorKey = "";
   schedule();
 });
 
