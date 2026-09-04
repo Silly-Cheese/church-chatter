@@ -1,5 +1,5 @@
 import { auth } from "./firebase.js";
-import { getChurchContext, getMemberships, getUserProfile, PERMISSIONS } from "./services.js";
+import { getChurchContext, getMemberships, getUserProfile, observeAuth, PERMISSIONS } from "./services.js";
 import {
   connectRouteShell,
   decorateOnboardingDiscovery,
@@ -140,10 +140,7 @@ async function mount() {
     return;
   }
 
-  if (!connectState.memberships.length) {
-    // Onboarding discovery is handled as a modal because there is no church shell yet.
-    return;
-  }
+  if (!connectState.memberships.length) return;
 
   if (route === "network" && !canNetwork()) {
     toast("Church Network is restricted", "Your role cannot communicate on behalf of this congregation.", "error");
@@ -186,7 +183,7 @@ window.addEventListener("church-chatter-phase3-refresh", () => {
 const observer = new MutationObserver(schedule);
 observer.observe(document.querySelector("#app"), { childList: true, subtree: true });
 
-auth.onAuthStateChanged(() => {
+observeAuth(() => {
   connectState = null;
   qrHandled = false;
   mountingKey = "";
